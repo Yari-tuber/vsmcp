@@ -100,7 +100,7 @@ export class LocaltunnelTunnel {
 
     const wanted = subdomain.trim()
     if (wanted && !SUBDOMAIN_RE.test(wanted)) {
-      throw new Error('mcpServer.tunnelSubdomain 只能包含字母、数字和连字符，且长度 3–63（例如 my-mcp-7f3a）')
+      throw new Error('vsmcp.tunnelSubdomain 只能包含字母、数字和连字符，且长度 3–63（例如 my-mcp-7f3a）')
     }
 
     const attempts = wanted ? SUBDOMAIN_RETRIES : 1
@@ -159,10 +159,10 @@ export class LocaltunnelTunnel {
         signal: AbortSignal.timeout(8000),
       })
       const body = await res.text()
-      if (res.ok && body.includes('"status":"ok"') && body.includes('connectedAgents')) {
+      if (body.includes('vsmcp-hub') || (body.includes('"status":"ok"') && body.includes('connectedAgents'))) {
         return (
-          '诊断：该地址当前返回的是**本扩展的 /health 响应** —— 占用者是**你自己的另一个 VS Code 窗口/实例**' +
-          '（或上一次未完全退出的实例）。请关闭其它窗口，或让每个窗口使用不同的 mcpServer.tunnelSubdomain。'
+          '诊断：该地址当前返回的是**本扩展的 /health 响应** —— 占用者是**你自己的另一个 VS Code 实例**' +
+          '（或上一次未完全退出的实例）。请关闭其它窗口，或换一个 vsmcp.tunnelSubdomain。'
         )
       }
       return '诊断：该地址当前可访问，但响应不是本扩展 —— 这个名字被**别人**占用了，请换一个更独特的名字。'
@@ -211,8 +211,9 @@ export class LocaltunnelTunnel {
 
   /** 停止隧道 */
   stop(): void {
-    if (!this.tunnel) return
+    // 先置位：启动重试过程中被停掉时，open() / 重试循环能看到并退出
     this.stopped = true
+    if (!this.tunnel) return
     log.info('隧道', '正在停止 localtunnel 隧道...')
     const current = this.tunnel
     this.tunnel = null

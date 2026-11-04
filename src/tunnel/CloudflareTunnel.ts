@@ -1,5 +1,6 @@
 import { spawn, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
+import * as net from 'net'
 import * as path from 'path'
 import { log } from '../utils/logger.js'
 
@@ -15,6 +16,27 @@ export class CloudflaredNotInstalledError extends Error {
   }
 }
 
+/** 隧道配置不完整（比如有令牌没有域名），自动重试没用，要用户改设置 */
+export class TunnelConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TunnelConfigError'
+  }
+}
+
+/** 找一个空闲的本机端口给 cloudflared 的 metrics 用 */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.once('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address()
+      const port = typeof addr === 'object' && addr ? addr.port : 0
+      srv.close(() => resolve(port))
+    })
+  })
+}
+
 /** 隧道被主动停止（stop()/dispose() 杀掉了启动中的进程，并非故障） */
 export class TunnelAbortedError extends Error {
   constructor() {
@@ -24,7 +46,7 @@ export class TunnelAbortedError extends Error {
 }
 
 /** 解析 cloudflared 可执行文件：先查常见安装位置，再查 PATH */
-function resolveCloudflared(): string | null {
+export function resolveCloudflared(): string | null {
   const candidates: Array<string> = []
   const pf86 = process.env['ProgramFiles(x86)']
   const pf = process.env['ProgramFiles']
@@ -55,6 +77,8 @@ export class CloudflareTunnel {
   private _url: string | null = null
   // 记录被我们主动 kill 的进程，用于区分「主动停止」与「真实崩溃」
   private killed = new Set<ChildProcess>()
+  /** cloudflared metrics 端口（/ready 返回边缘连接数），0 = 没开 */
+  private metricsPort = 0
 
   /** 当前获取到的公网根地址（隧道未运行或尚未获取到时为 null） */
   get url(): string | null {
@@ -95,20 +119,28 @@ export class CloudflareTunnel {
 
     // 令牌/命名隧道的公网地址由发号方在 Cloudflare 侧配置，无法从 cloudflared 输出推断，必须显式提供
     if ((isToken || isNamed) && !hostname) {
-      throw new Error(
+      throw new TunnelConfigError(
         isToken
-          ? '已设置 mcpServer.tunnelToken，但缺少 mcpServer.tunnelHostname：令牌隧道的公网地址无法自动推断，请填写发号方给你的固定域名'
-          : '已设置 mcpServer.tunnelName，但缺少 mcpServer.tunnelHostname：请填写命名隧道绑定的固定域名',
+          ? '已设置隧道令牌，但缺少 vsmcp.tunnelHostname：令牌隧道的公网地址无法自动推断，请填写发号方给你的固定域名'
+          : '已设置 vsmcp.tunnelName，但缺少 vsmcp.tunnelHostname：请填写命名隧道绑定的固定域名',
       )
     }
 
+    // metrics：轮询 /ready 拿边缘连接数，判断「进程在但连不上」
+    try {
+      this.metricsPort = await freePort()
+    } catch {
+      this.metricsPort = 0
+    }
+    const metrics = this.metricsPort ? ['--metrics', `127.0.0.1:${this.metricsPort}`] : []
+
     // --no-autoupdate 是 cloudflared 全局参数，放在最前避免与 run 子命令的参数解析冲突
     const args = isToken
-      ? ['--no-autoupdate', 'tunnel', 'run', '--token', token]
+      ? ['--no-autoupdate', 'tunnel', ...metrics, 'run', '--token', token]
       : isNamed
-        ? ['--no-autoupdate', 'tunnel', 'run', name]
+        ? ['--no-autoupdate', 'tunnel', ...metrics, 'run', name]
         : // --protocol http2：QUIC(UDP) 在部分网络（尤其国内）会被丢弃，导致边缘连接失败、公网访问 530；固定走 TCP 兼容性最好
-          ['tunnel', '--url', `http://127.0.0.1:${port}`, '--protocol', 'http2', '--no-autoupdate']
+          ['tunnel', '--url', `http://127.0.0.1:${port}`, '--protocol', 'http2', '--no-autoupdate', ...metrics]
 
     log.info('隧道', isToken
       ? `正在启动令牌隧道（本地端口 ${port}，固定域名 ${hostname}）...`
@@ -173,7 +205,7 @@ export class CloudflareTunnel {
               ? new TunnelAbortedError()
               : new Error(
                   isToken
-                    ? `令牌隧道启动失败（退出码 ${code}）：请确认 mcpServer.tunnelToken 有效（令牌失效需向发号方重新索取），且 mcpServer.tunnelHostname 与隧道配置一致`
+                    ? `令牌隧道启动失败（退出码 ${code}）：请确认隧道令牌有效（令牌失效需向发号方重新索取），且 vsmcp.tunnelHostname 与隧道配置一致`
                     : isNamed
                       ? `命名隧道 ${name} 启动失败（退出码 ${code}）：请确认已在 ~/.cloudflared 完成 cloudflared tunnel login / create / route dns 配置`
                       : `cloudflared 提前退出（退出码 ${code}）`,
@@ -196,6 +228,18 @@ export class CloudflareTunnel {
         }, URL_TIMEOUT_MS)
       }
     })
+  }
+
+  /** 当前边缘连接数（cloudflared metrics /ready）；metrics 没开或拿不到返回 null */
+  async readyConnections(): Promise<number | null> {
+    if (!this.proc || !this.metricsPort) return null
+    try {
+      const res = await fetch(`http://127.0.0.1:${this.metricsPort}/ready`, { signal: AbortSignal.timeout(2000) })
+      const data = (await res.json()) as { readyConnections?: number }
+      return typeof data.readyConnections === 'number' ? data.readyConnections : res.ok ? 1 : 0
+    } catch {
+      return null
+    }
   }
 
   /** 停止隧道进程 */

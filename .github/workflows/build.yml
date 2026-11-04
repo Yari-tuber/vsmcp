@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: 类型检查 / 编译 / 打包 VSIX
+    name: 类型检查 / 单测 / 编译 / 打包 VSIX
     runs-on: ubuntu-latest
 
     steps:
@@ -31,6 +31,9 @@ jobs:
 
       - name: 类型检查
         run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
 
       - name: 编译（生产构建）
         run: npm run build:prod

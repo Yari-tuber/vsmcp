@@ -1,6 +1,8 @@
 node_modules/
 out/
+out-test/
 *.vsix
 *.js.map
 .mcp.json
 .claude/settings.local.json
+.vscode-test/

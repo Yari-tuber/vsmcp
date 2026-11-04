@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--VSMCP:CSP-->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VSMCP 控制台</title>
+<!--
+  VSMCP 侧栏面板：只管渲染，不管数据。
+  - 在 VS Code 里：扩展读这个文件，换掉 CSP 和资源地址，再用 postMessage 推 { type: 'state', state } 进来。
+  - 单独在浏览器里打开：一样等 postMessage；用 panel-demo.html 可以喂假数据看效果、截图。
+  状态数据的格式见 src/ui/panelState.ts（PanelState）。
+-->
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<main id="app" class="app" aria-live="polite">
+  <div class="boot">
+    <div class="boot-mark"></div>
+    <div>正在读取状态…</div>
+  </div>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="panel.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import * as vscode from 'vscode'
+import type * as vscode from 'vscode'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -45,7 +45,7 @@ class Logger {
     this.channel?.appendLine(line)
 
     if (level === 'error') {
-      console.error(`[MCP 桥接] ${line}`)
+      console.error(`[VSMCP] ${line}`)
     }
   }
 }

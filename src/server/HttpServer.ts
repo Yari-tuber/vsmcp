@@ -3,46 +3,41 @@ import { execFile } from 'child_process'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { VsCodeBridge } from '../bridge/VsCodeBridge.js'
-import { ContextPusher } from '../context/ContextPusher.js'
-import { TerminalManager } from '../terminal/TerminalManager.js'
+import type { VsCodeBridge } from '../bridge/VsCodeBridge.js'
+import type { ContextPusher } from '../context/ContextPusher.js'
+import type { TerminalManager } from '../terminal/TerminalManager.js'
 import { registerTools } from '../tools/index.js'
+import type { WorkspaceTools } from '../tools/workspaceTools.js'
 import type { Settings } from '../config/Settings.js'
+import { relaxTimeouts } from '../hub/HubServer.js'
 import { log } from '../utils/logger.js'
 
-const MCP_INSTRUCTIONS = `你已连接到一个实时运行的 VS Code 实例。以下建议可帮助你充分利用这些工具：
+/** 每个窗口的 MCP 服务最多顺延几个端口（默认 3333–3337） */
+export const WINDOW_PORT_SPAN = 5
 
-写入文件：
-- 在调用 write_file 或 create_file 之前，可先调用 show_diff，让用户在更改真正应用之前先在 VS Code 中可视化审查。
+const MCP_INSTRUCTIONS = `你已连接到一个实时运行的 VS Code（VSMCP）。这个地址背后可能有好几个 VS Code 窗口，请求会发给用户选定的「AI 现在操作的项目」。
 
-理解上下文：
-- 当用户询问代码问题时，可调用 get_active_file 和 get_selection 查看用户当前正在查看的内容。
-- 诊断错误时，get_diagnostics 提供的 LSP 错误往往比凭空猜测更准确。
+开始之前：
+- 先调用 workspace_overview，确认当前项目和根路径（workspacePath），不要沿用上个项目的路径。
+- 之后的增强工具（list_directory、find_files、search_text、read_files、git_inspect）都要传这个 workspacePath；遇到「工作区已切换」就重新调用 workspace_overview。
 
-浏览代码：
-- go_to_definition 可定位符号的定义位置，通常比文本搜索更快。
-- find_references 可帮助你评估一次更改的影响范围。
-- get_document_symbols 可提供文件的结构概览。
-- search_workspace_symbols 可在整个项目中定位类型、函数或类。
+看代码：
+- 浏览目录用 list_directory，按文件名找用 find_files，跨文件搜内容用 search_text，一次读多个文件用 read_files。
+- read_files 读磁盘上已保存的内容；用户未保存的编辑用 read_file 或 get_active_file。
+- 要看用户正在看什么：get_active_file、get_selection；LSP 错误用 get_diagnostics。
+- go_to_definition、find_references、get_document_symbols、search_workspace_symbols 比文本搜索更准。
+- 查 Git 用 git_inspect（status / diff / staged / log），它只读。
 
-进行更改：
-- rename_symbol 是重构安全且全工作区生效的——对标识符而言通常优于查找替换。
-- 更改完成后，可再次调用 get_diagnostics 确认没有引入新错误。
+改代码：
+- 改之前先读相关文件；需要时先用 show_diff 让用户在 VS Code 里看差异，再 write_file / create_file。
+- rename_symbol 是全工作区安全重命名，比查找替换更好。
+- 改完再调 get_diagnostics 确认没有新错误，用 run_terminal_command 跑项目自己的测试。
 
-运行命令：
-- run_terminal_command 适合短命令（构建、测试、lint、安装）。
+命令和长期进程：
+- run_terminal_command 适合会结束的命令（构建、测试、lint、安装），默认超时 2 分钟，可用 timeoutMs 调长。
+- 开发服务器、watch、tail -f 这类长期进程用 spawn_terminal，之后用 read_terminal 看输出、write_terminal 输入、kill_terminal 结束。
 
-长时间运行的进程：
-- spawn_terminal 专为持续运行的进程设计——开发服务器、watch 模式、docker compose、tail -f 等。
-- list_terminals 显示所有托管终端以及它们是否仍在运行。
-- read_terminal 可稍后查看输出，可只请求最后 N 行而不必读取整个缓冲区。
-- write_terminal 向运行中的进程发送输入（例如回答提示、输入命令）。
-- kill_terminal 停止进程并清理。
-- 注意：run_terminal_command 在长时间运行的进程上会超时——请改用 spawn_terminal。
-
-通用：
-- 如果不清楚工作区根目录或技术栈，可在会话开始时调用 get_workspace_info 了解概况。
-- VS Code 的原生工具（LSP、git、符号）通常比原始文件搜索更快、语义理解更强。`
+只根据工具实际返回判断完成情况。`
 
 interface SessionEntry {
   transport: SSEServerTransport
@@ -54,8 +49,9 @@ export class PortInUseError extends Error {
   constructor(
     public readonly port: number,
     public readonly owner: string,
+    public readonly lastPort: number = port,
   ) {
-    super(`端口 ${port} 已被 ${owner} 占用`)
+    super(lastPort > port ? `端口 ${port}–${lastPort} 都被占用了（${port} 被 ${owner} 占用）` : `端口 ${port} 已被 ${owner} 占用`)
     this.name = 'PortInUseError'
   }
 }
@@ -70,7 +66,7 @@ function runCapture(cmd: string, args: string[]): Promise<string | null> {
 }
 
 /** 找出占用某端口的进程描述（尽力而为，失败返回「未知进程」） */
-async function findPortOwner(port: number): Promise<string> {
+export async function findPortOwner(port: number): Promise<string> {
   try {
     if (process.platform === 'win32') {
       const netstat = await runCapture('netstat', ['-ano'])
@@ -109,8 +105,11 @@ export class HttpServer {
     private pusher: ContextPusher,
     private settings: Settings,
     private terminalManager: TerminalManager,
+    private workspaceTools: WorkspaceTools,
+    private workspaceName: () => string | null = () => null,
   ) {
     this.httpServer = http.createServer(this.handleRequest.bind(this))
+    relaxTimeouts(this.httpServer)
   }
 
   get connectionCount(): number {
@@ -122,50 +121,33 @@ export class HttpServer {
   }
 
   /**
-   * 启动 HTTP 服务器。
+   * 启动本窗口的 MCP 服务。
    *
-   * 默认「固定端口」：始终绑定 preferredPort，本地地址 http://127.0.0.1:<preferredPort>/…
-   * 跨重启保持稳定。被占用时先在同端口短重试（吸收扩展宿主重启/旧进程退出竞态），
-   * 仍失败则抛出 PortInUseError（含占用进程信息），由上层提示用户处理，绝不悄悄改地址。
-   *
-   * 仅当 fallback = true（mcpServer.portFallback）时，才按旧行为顺延到相邻端口（会改变地址）。
+   * 多窗口时每个窗口要一个端口：从 preferredPort 起顺延（共 WINDOW_PORT_SPAN 个，默认 3333–3337），
+   * 跳过 avoid 里的端口（Hub 端口）。fallback = false 时只用 preferredPort（单窗口固定地址）。
+   * 每个端口先短重试几次，吸收窗口重载时旧扩展宿主还没退出的竞态。
    */
-  async start(preferredPort: number, fallback = false): Promise<number> {
+  async start(preferredPort: number, fallback = true, avoid: number[] = []): Promise<number> {
     const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-
-    // 1) 固定端口，短重试吸收竞态
-    for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) await delay(250)
-      try {
-        await this.listen(preferredPort)
-        this.actualPort = preferredPort
-        log.info('服务器', `已固定绑定端口 ${preferredPort}（地址保持稳定）`)
-        return preferredPort
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw err
-        log.warn('服务器', `端口 ${preferredPort} 被占用（第 ${attempt + 1} 次尝试），稍后重试...`)
-      }
+    const ports: number[] = []
+    for (let p = preferredPort; ports.length < (fallback ? WINDOW_PORT_SPAN : 1) && p < preferredPort + 20; p++) {
+      if (!avoid.includes(p)) ports.push(p)
     }
-
-    // 2) 定位占用方
-    const owner = await findPortOwner(preferredPort)
-
-    // 3) 兼容旧行为：显式开启 portFallback 时顺延端口（会改变地址）
-    if (fallback) {
-      for (let offset = 1; offset < 5; offset++) {
-        const port = preferredPort + offset
+    for (let round = 0; round < 3; round++) {
+      if (round > 0) await delay(300)
+      for (const port of ports) {
         try {
           await this.listen(port)
           this.actualPort = port
-          log.warn('服务器', `端口 ${preferredPort} 被占用（${owner}），已顺延到 ${port}（mcpServer.portFallback=true）`)
+          log.info('服务器', `本窗口 MCP 服务监听 127.0.0.1:${port}`)
           return port
         } catch (err: unknown) {
-          if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw err
+          if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE' && (err as NodeJS.ErrnoException).code !== 'EACCES') throw err
         }
       }
     }
-
-    throw new PortInUseError(preferredPort, owner)
+    const owner = await findPortOwner(ports[0] ?? preferredPort)
+    throw new PortInUseError(ports[0] ?? preferredPort, owner, ports[ports.length - 1] ?? preferredPort)
   }
 
   /** 在指定端口上监听（成功/失败均只结算一次） */
@@ -190,7 +172,15 @@ export class HttpServer {
       session.unsubscribePush()
     }
     this.sessions.clear()
-    await new Promise<void>((resolve) => this.httpServer.close(() => resolve()))
+    if (!this.httpServer.listening) {
+      this.actualPort = 0
+      return
+    }
+    await new Promise<void>((resolve) => {
+      this.httpServer.close(() => resolve())
+      this.httpServer.closeAllConnections?.()
+    })
+    this.actualPort = 0
   }
 
   private checkAuth(req: http.IncomingMessage): boolean {
@@ -211,11 +201,14 @@ export class HttpServer {
       return
     }
 
-    if (req.url === '/health') {
+    const pathname = (req.url ?? '/').split('?')[0]
+    if (pathname === '/health' || pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         status: 'ok',
+        service: 'vsmcp-window',
         version: __EXT_VERSION__,
+        workspace: this.workspaceName(),
         connectedAgents: this.sessions.size,
         port: this.actualPort,
       }))
@@ -229,17 +222,17 @@ export class HttpServer {
       return
     }
 
-    if (req.url === '/sse' && req.method === 'GET') {
+    if (pathname === '/sse' && req.method === 'GET') {
       await this.handleSse(req, res)
       return
     }
 
-    if (req.url?.startsWith('/messages') && req.method === 'POST') {
+    if (pathname.startsWith('/messages') && req.method === 'POST') {
       await this.handleMessages(req, res)
       return
     }
 
-    if (req.url === '/mcp') {
+    if (pathname === '/mcp') {
       if (req.method === 'POST') {
         await this.handleMcp(req, res)
         return
@@ -276,7 +269,7 @@ export class HttpServer {
               method: 'notifications/message',
               params: {
                 level: 'info',
-                logger: 'vscode-mcp',
+                logger: 'vsmcp',
                 data: { type, payload },
               },
             }).catch(() => undefined)
@@ -355,10 +348,10 @@ export class HttpServer {
   /** 每个连接/请求创建一个 McpServer 实例（SDK 设计要求），/sse 与 /mcp 共用同一套工具注册 */
   private createMcpServer(): McpServer {
     const mcpServer = new McpServer(
-      { name: 'vscode-mcp-bridge', version: __EXT_VERSION__ },
+      { name: 'vsmcp', version: __EXT_VERSION__ },
       { instructions: MCP_INSTRUCTIONS },
     )
-    registerTools(mcpServer, this.bridge, this.settings, this.terminalManager)
+    registerTools(mcpServer, this.bridge, this.settings, this.terminalManager, this.workspaceTools)
     return mcpServer
   }
 }

@@ -1,27 +1,34 @@
 {
-  "name": "vscode-mcp-api",
-  "displayName": "VS Code MCP 桥接",
-  "description": "通过 MCP 将 VS Code IDE 的能力桥接给 AI 编程智能体",
-  "version": "1.0.1",
-  "publisher": "jhamama",
+  "name": "vsmcp",
+  "displayName": "VSMCP",
+  "description": "让网页版 ChatGPT 通过 MCP + 内网穿透读、改你电脑上 VS Code 打开的项目：一键开外网、多窗口自动跟随 / 锁定、断线自动恢复。",
+  "version": "2.0.0",
+  "publisher": "yari",
   "private": true,
   "engines": {
     "vscode": "^1.93.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Danchuna/vscode-mcp-api"
+    "url": "https://github.com/Yari-tuber/vsmcp"
   },
+  "bugs": {
+    "url": "https://github.com/Yari-tuber/vsmcp/issues"
+  },
+  "homepage": "https://github.com/Yari-tuber/vsmcp#readme",
   "license": "MIT",
   "categories": [
+    "AI",
     "Other"
   ],
   "keywords": [
     "mcp",
+    "chatgpt",
     "ai",
     "agent",
-    "lsp",
-    "diagnostics"
+    "tunnel",
+    "cloudflared",
+    "lsp"
   ],
   "icon": "icon.png",
   "activationEvents": [
@@ -29,151 +36,286 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vsmcp",
+          "title": "VSMCP",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vsmcp": [
+        {
+          "type": "webview",
+          "id": "vsmcp.panel",
+          "name": "控制台"
+        }
+      ]
+    },
     "configuration": {
-      "title": "MCP 服务器",
+      "title": "VSMCP",
       "properties": {
-        "mcpServer.port": {
+        "vsmcp.port": {
           "type": "number",
           "default": 3333,
-          "description": "MCP 服务器的 HTTP 端口"
+          "markdownDescription": "每个 VS Code 窗口自己的 MCP 服务从这个端口开始找空闲口（默认 3333–3337，五个窗口）。一般不用改。"
         },
-        "mcpServer.enableContextPush": {
+        "vsmcp.portFallback": {
           "type": "boolean",
           "default": true,
-          "description": "自动将上下文更新（活动文件、选区、诊断信息）推送给已连接的智能体"
+          "markdownDescription": "端口被占用时顺延到后面的端口（`vsmcp.port` 起共 5 个）。多开窗口需要它，默认开。关掉后只用 `vsmcp.port`，第二个窗口会起不来。"
         },
-        "mcpServer.authToken": {
+        "vsmcp.hubPort": {
+          "type": "number",
+          "default": 3340,
+          "markdownDescription": "Hub 端口：所有窗口里只有一个当 Hub，外网隧道接在这个端口上，再转给「AI 现在操作的项目」所在窗口。不要和 `vsmcp.port` 起的 5 个端口重叠。"
+        },
+        "vsmcp.autoStartTunnel": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "VS Code 启动时自动开启外网（由 Hub 窗口负责）。平时也可以在侧栏面板或状态栏「外网」上一键开关。\n\n[一键开启/关闭外网](command:vsmcp.toggleTunnel)"
+        },
+        "vsmcp.autoRecover": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "外网断了自动重建：刚启动的 90 秒不算、断开满 60 秒才重建，重建间隔 120 秒起、每次翻倍、最长 600 秒。"
+        },
+        "vsmcp.enableContextPush": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动把上下文更新（活动文件、选区、诊断信息）推送给已连接的智能体（SSE 连接）"
+        },
+        "vsmcp.authToken": {
           "type": "string",
           "default": "",
-          "description": "HTTP 连接所需的 Bearer 令牌（留空 = 不启用认证）"
+          "markdownDescription": "可选的 Bearer 令牌。**留空 = 不鉴权**（网页版 ChatGPT 填不了请求头，默认就是留空）。填了以后所有请求都要带 `Authorization: Bearer <令牌>`。"
         },
-        "mcpServer.allowedCommands": {
+        "vsmcp.allowedCommands": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "允许通过 execute_vscode_command 工具执行的 VS Code 命令列表（留空 = 全部禁止）"
+          "markdownDescription": "`execute_vscode_command` 工具允许执行的 VS Code 命令。**留空 = 不限制**；填了就只允许列表里的命令。"
         },
-        "mcpServer.enableCloudflareTunnel": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "服务器启动时自动开启 cloudflared 临时隧道（trycloudflare.com），让外网可以访问 MCP 服务器。\n\n[🚀 一键开启/关闭外网隧道](command:mcpServer.toggleTunnel) —— 服务器未运行时会先启动本地服务器；未安装 cloudflared 时会提示 **winget 自动安装 / 复制安装命令 / 复制下载直链 / 打开下载页面**。\n\n当前外网地址、「复制地址」「复制关键提示词」等操作都在「MCP 桥接面板」中：命令面板运行「VS Code MCP 桥接：打开管理面板」，或点击状态栏的 MCP 项选择「打开管理面板」。\n\n[cloudflared 官方下载页面](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) · [Windows 直链下载](https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe)\n\n也可随时点击 VS Code 状态栏的「外网隧道」按钮。"
-        },
-        "mcpServer.portFallback": {
-          "type": "boolean",
-          "default": false,
-          "description": "端口被占用时自动顺延到相邻端口（会改变 MCP 地址）。默认 false：固定使用 mcpServer.port，被占用时给出明确错误提示。"
-        },
-        "mcpServer.tunnelProvider": {
+        "vsmcp.tunnelProvider": {
           "type": "string",
           "enum": [
             "cloudflare",
             "localtunnel"
           ],
           "enumDescriptions": [
-            "cloudflared 隧道（默认）：临时隧道地址每次随机；配置隧道令牌/命名隧道可得到固定地址。国内连通性最好，需安装 cloudflared。",
-            "localtunnel（loca.lt）：零账号、零域名、免安装 cloudflared，可指定子域名得到固定地址；但它是免费第三方服务，稳定性与延迟不如 Cloudflare。"
+            "cloudflared（默认）：临时地址每次随机；配隧道令牌 / 命名隧道可得到固定地址。国内连通性最好，需要装 cloudflared（没装会提示一键安装）。",
+            "localtunnel（loca.lt）：零账号、零域名、不用装 cloudflared，地址可固定；免费第三方服务，稳定性和延迟不如 Cloudflare。"
           ],
           "default": "cloudflare",
-          "markdownDescription": "外网隧道的实现方式。\n\n- `cloudflare`：使用 cloudflared（临时隧道地址每次随机；用隧道令牌/命名隧道可固定地址）\n- `localtunnel`：使用 loca.lt，**零账号、零域名、免安装 cloudflared**，地址形如 `https://<子域名>.loca.lt/mcp` 且可固定"
+          "markdownDescription": "外网隧道用哪一种。\n\n- `cloudflare`：cloudflared（临时隧道地址每次随机；令牌 / 命名隧道地址固定）\n- `localtunnel`：loca.lt，零账号、零域名，地址形如 `https://<子域名>.loca.lt/mcp`"
         },
-        "mcpServer.tunnelSubdomain": {
+        "vsmcp.tunnelSubdomain": {
           "type": "string",
           "default": "",
-          "markdownDescription": "`localtunnel` 模式的固定子域名（如 `my-mcp-7f3a`），最终地址为 `https://<子域名>.loca.lt/mcp`。\n\n留空 = 扩展自动生成一个**随机**子域名并持久保存（重启不变，且不可猜测）。\n\n⚠️ loca.lt 的子域名是**公共先到先得**资源，无法真正预留：隧道断开后别人可能抢注同名子域名并劫持该地址。因此建议留空，使用自动生成的随机子域名（不可猜测 → 实际无法被抢）。"
+          "markdownDescription": "`localtunnel` 的固定子域名（如 `my-mcp-7f3a`），地址为 `https://<子域名>.loca.lt/mcp`。\n\n留空 = 自动生成一个**随机**子域名并保存（重启不变，别人猜不到）。loca.lt 的子域名先到先得、没法真正预留，建议留空。"
         },
-        "mcpServer.tunnelTokenFile": {
+        "vsmcp.tunnelTokenFile": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**令牌隧道（推荐用于固定公网地址）**：隧道令牌的存放方式。\n\n⚠️ 令牌是敏感凭据，**绝对不要写进 settings.json**（用户设置会被 Settings Sync 同步，工作区设置会被 git 提交）。请任选一种：\n\n1. 命令面板运行「VS Code MCP 桥接：设置隧道令牌」，保存到**系统凭据库**（推荐，面板上也有按钮）；\n2. 或把令牌写入一个**仓库之外**的文件，并在此填写该文件路径（支持 `~`，适合批量/脚本部署）。\n\n启用后扩展会运行 `cloudflared tunnel run --token <令牌>`：用户端**无需 Cloudflare 账号、无需域名、无需登录**，公网地址永久固定为 `https://<mcpServer.tunnelHostname>/mcp`。需与 `mcpServer.tunnelHostname` 一起使用。"
+          "markdownDescription": "**令牌隧道（固定公网地址）**：令牌是敏感凭据，**不要写进 settings.json**。任选一种：\n\n1. 命令面板运行「VSMCP：设置隧道令牌」，存进系统凭据库（推荐）；\n2. 写进一个**仓库之外**的文件，在这里填文件路径（支持 `~`）。\n\n需要和 `vsmcp.tunnelHostname` 一起用，地址固定为 `https://<tunnelHostname>/mcp`。"
         },
-        "mcpServer.tunnelName": {
+        "vsmcp.tunnelName": {
           "type": "string",
           "default": "",
-          "description": "固定公网地址的命名隧道名称（需先在 ~/.cloudflared 完成 cloudflared tunnel login / create / route dns 配置）。留空 = 使用 trycloudflare 临时隧道（公网地址每次启动都会变）。"
+          "description": "自建命名隧道的名称（需要先在 ~/.cloudflared 完成 cloudflared tunnel login / create / route dns）。留空 = 用 trycloudflare 临时隧道（地址每次开都会变）。"
         },
-        "mcpServer.tunnelHostname": {
+        "vsmcp.tunnelHostname": {
           "type": "string",
           "default": "",
-          "description": "命名隧道对应的固定公网域名（如 mcp.example.com）。与 mcpServer.tunnelName 同时设置后，外网地址固定为 https://<hostname>/mcp，不再每次变化。"
+          "description": "令牌隧道 / 命名隧道对应的固定域名（如 mcp.example.com），外网地址固定为 https://<域名>/mcp。"
         },
-        "mcpServer.terminalStrategy": {
+        "vsmcp.terminalStrategy": {
           "type": "string",
           "enum": [
             "childProcess",
             "shellIntegration"
           ],
           "default": "childProcess",
-          "description": "终端命令的执行方式。childProcess 能可靠捕获输出；shellIntegration 会在 VS Code 终端面板中显示（需要 VS Code 1.93+）"
+          "description": "run_terminal_command 的执行方式：childProcess 能可靠拿到输出；shellIntegration 会在 VS Code 终端面板里显示（需要 VS Code 1.93+）"
+        },
+        "vsmcp.commandTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "run_terminal_command 没传 timeoutMs 时的默认超时（毫秒，默认 2 分钟；单次最长 1 小时）"
         }
       }
     },
     "commands": [
       {
-        "command": "mcpServer.start",
-        "title": "VS Code MCP 桥接：启动服务器"
+        "command": "vsmcp.openPanel",
+        "title": "打开控制台",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.stop",
-        "title": "VS Code MCP 桥接：停止服务器"
+        "command": "vsmcp.toggleTunnel",
+        "title": "开启 / 关闭外网",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.restart",
-        "title": "VS Code MCP 桥接：重启服务器"
+        "command": "vsmcp.startTunnel",
+        "title": "开启外网",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.copyConnectionUrl",
-        "title": "VS Code MCP 桥接：复制连接地址"
+        "command": "vsmcp.stopTunnel",
+        "title": "关闭外网",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.setTunnelToken",
-        "title": "VS Code MCP 桥接：设置隧道令牌"
+        "command": "vsmcp.copyPublicUrl",
+        "title": "复制 ChatGPT 连接地址",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.clearTunnelToken",
-        "title": "VS Code MCP 桥接：清除隧道令牌"
+        "command": "vsmcp.showTunnelUrl",
+        "title": "显示 / 复制外网地址",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.toggleTunnel",
-        "title": "VS Code MCP 桥接：启动/停止外网隧道"
+        "command": "vsmcp.copyUsagePrompt",
+        "title": "复制使用提示词",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.showTunnelUrl",
-        "title": "VS Code MCP 桥接：显示/复制外网地址"
+        "command": "vsmcp.copyVerifyPrompt",
+        "title": "复制 GPT 验证提示词",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.copyKeyPrompt",
-        "title": "VS Code MCP 桥接：复制关键提示词"
+        "command": "vsmcp.copyKeyPrompt",
+        "title": "复制关键提示词（地址 + 使用指令）",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.openPanel",
-        "title": "VS Code MCP 桥接：打开管理面板"
+        "command": "vsmcp.copyLocalUrl",
+        "title": "复制本机地址",
+        "category": "VSMCP"
       },
       {
-        "command": "mcpServer.showStatus",
-        "title": "VS Code MCP 桥接：查看状态 / 选项"
+        "command": "vsmcp.lockCurrent",
+        "title": "锁定当前项目给 AI",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.autoFollow",
+        "title": "自动跟随最后点过的窗口",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.selectTarget",
+        "title": "选择给 AI 的项目",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.recover",
+        "title": "启动 / 恢复连接",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.diagnose",
+        "title": "连接自检",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.showLogs",
+        "title": "查看日志",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.refresh",
+        "title": "刷新",
+        "category": "VSMCP",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vsmcp.openSettings",
+        "title": "打开设置",
+        "category": "VSMCP",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "vsmcp.setTunnelToken",
+        "title": "设置隧道令牌",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.clearTunnelToken",
+        "title": "清除隧道令牌",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.start",
+        "title": "启动本窗口 MCP 服务",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.stop",
+        "title": "停止本窗口 MCP 服务",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.restart",
+        "title": "重启本窗口 MCP 服务",
+        "category": "VSMCP"
+      },
+      {
+        "command": "vsmcp.showStatus",
+        "title": "查看状态 / 选项",
+        "category": "VSMCP"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vsmcp.refresh",
+          "when": "view == vsmcp.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vsmcp.openSettings",
+          "when": "view == vsmcp.panel",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vsmcp.refresh",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run build:prod",
-    "build": "node esbuild.config.js",
-    "build:prod": "node esbuild.config.js --production",
-    "watch": "node esbuild.config.js --watch",
+    "build": "node esbuild.config.mjs",
+    "build:prod": "node esbuild.config.mjs --production",
+    "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "package": "vsce package"
+    "test": "node scripts/build-tests.mjs && node --test --test-reporter=spec \"out-test/*.test.cjs\"",
+    "package": "vsce package --no-dependencies",
+    "e2e": "node scripts/e2e/run.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "localtunnel": "^2.0.2",
-    "zod": "^3.23.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/vscode": "^1.93.0",
-    "@vscode/vsce": "^3.0.0",
-    "esbuild": "^0.24.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^22.20.5",
+    "@types/vscode": "1.93.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
   }
 }

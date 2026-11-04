@@ -1,7 +1,9 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer, ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { VsCodeBridge } from '../bridge/VsCodeBridge.js'
-import { TerminalManager } from '../terminal/TerminalManager.js'
+import type { VsCodeBridge } from '../bridge/VsCodeBridge.js'
+import type { TerminalManager } from '../terminal/TerminalManager.js'
+import type { WorkspaceTools } from './workspaceTools.js'
+import { TOOL_META } from './catalog.js'
 import type { Settings } from '../config/Settings.js'
 import { log } from '../utils/logger.js'
 
@@ -38,29 +40,36 @@ function logged<T, R>(toolName: string, handler: (args: T) => Promise<R>): (args
   }
 }
 
-export function registerTools(server: McpServer, bridge: VsCodeBridge, settings: Settings, terminalManager: TerminalManager): void {
-  log.info('工具', '正在注册工具')
+export function registerTools(server: McpServer, bridge: VsCodeBridge, settings: Settings, terminalManager: TerminalManager, workspaceTools: WorkspaceTools): void {
+  log.debug('工具', '正在注册工具')
+
+  /** 统一注册：标题和 annotations（只读 / 破坏性）都从 catalog.ts 的 TOOL_META 取 */
+  function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S, handler: ToolCallback<S>): void {
+    const meta = TOOL_META[name]
+    if (!meta) throw new Error(`工具 ${name} 没有登记 annotations`)
+    server.registerTool(name, { title: meta.title, description, inputSchema: shape, annotations: meta.annotations }, handler)
+  }
 
   // --- Active File ---
-  server.tool('get_active_file', '获取 VS Code 中当前活动/打开的文件', {}, async () => {
+  tool('get_active_file', '获取 VS Code 中当前活动/打开的文件', {}, async () => {
     const snap = bridge.getActiveFileSnapshot()
     return { content: [{ type: 'text', text: JSON.stringify(snap) }] }
   })
 
   // --- Selection ---
-  server.tool('get_selection', '获取当前文本选区和光标位置', {}, async () => {
+  tool('get_selection', '获取当前文本选区和光标位置', {}, async () => {
     const snap = bridge.getSelectionSnapshot()
     return { content: [{ type: 'text', text: JSON.stringify(snap) }] }
   })
 
   // --- Open Tabs ---
-  server.tool('get_open_tabs', '获取 VS Code 中当前打开的所有文件标签页', {}, async () => {
+  tool('get_open_tabs', '获取 VS Code 中当前打开的所有文件标签页', {}, async () => {
     const tabs = bridge.getOpenTabs()
     return { content: [{ type: 'text', text: JSON.stringify(tabs) }] }
   })
 
   // --- Diagnostics ---
-  server.tool(
+  tool(
     'get_diagnostics',
     '获取 VS Code 语言服务器提供的 LSP 诊断信息（错误、警告、提示）',
     {
@@ -79,7 +88,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Show Diff ---
-  server.tool(
+  tool(
     'show_diff',
     '在应用文件更改之前，先在 VS Code 中展示可视化差异。不会写入文件。',
     {
@@ -94,7 +103,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Read File ---
-  server.tool(
+  tool(
     'read_file',
     '读取文件内容',
     {
@@ -109,7 +118,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Write File ---
-  server.tool(
+  tool(
     'write_file',
     '向文件写入内容。与 VS Code 撤销历史集成。',
     {
@@ -124,7 +133,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Create File ---
-  server.tool(
+  tool(
     'create_file',
     '创建新文件',
     {
@@ -138,7 +147,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Delete File ---
-  server.tool(
+  tool(
     'delete_file',
     '删除文件',
     {
@@ -152,7 +161,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Open File ---
-  server.tool(
+  tool(
     'open_file',
     '在 VS Code 编辑器中打开文件',
     {
@@ -168,7 +177,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Close File ---
-  server.tool(
+  tool(
     'close_file',
     '关闭 VS Code 中的文件标签页',
     {
@@ -181,23 +190,23 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Run Terminal Command ---
-  server.tool(
+  tool(
     'run_terminal_command',
-    '运行 shell 命令并捕获其输出',
+    '运行 shell 命令并捕获其输出。适合构建、测试、lint 这类会结束的命令；开发服务器等长期进程请用 spawn_terminal。',
     {
       command: z.string().describe('要运行的 shell 命令'),
       cwd: z.string().optional().describe('工作目录（默认为工作区根目录）'),
-      timeoutMs: z.number().int().min(1000).optional().default(30000).describe('超时时间（毫秒）'),
+      timeoutMs: z.number().int().min(1000).max(3_600_000).optional().describe('超时时间（毫秒，默认取设置 vsmcp.commandTimeoutMs，2 分钟；最长 1 小时）'),
     },
     async ({ command, cwd, timeoutMs }) => {
       const strategy = settings.get<string>('terminalStrategy') ?? 'childProcess'
-      const result = await bridge.runCommand(command, cwd, timeoutMs, strategy)
+      const result = await bridge.runCommand(command, cwd, timeoutMs ?? settings.commandTimeoutMs, strategy)
       return { content: [{ type: 'text', text: JSON.stringify(result) }] }
     }
   )
 
   // --- Find References ---
-  server.tool(
+  tool(
     'find_references',
     '使用 LSP 查找指定位置处符号的所有引用',
     {
@@ -220,7 +229,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Go To Definition ---
-  server.tool(
+  tool(
     'go_to_definition',
     '使用 LSP 获取指定位置处符号的定义位置',
     {
@@ -241,7 +250,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Get Hover ---
-  server.tool(
+  tool(
     'get_hover',
     '获取指定位置处符号的悬停信息（类型信息、文档）',
     {
@@ -263,7 +272,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Get Document Symbols ---
-  server.tool(
+  tool(
     'get_document_symbols',
     '获取文件中的所有符号（函数、类、变量等）',
     {
@@ -277,7 +286,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Search Workspace Symbols ---
-  server.tool(
+  tool(
     'search_workspace_symbols',
     '在整个工作区中搜索符号',
     {
@@ -297,7 +306,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Get Code Actions ---
-  server.tool(
+  tool(
     'get_code_actions',
     '获取文件中指定范围内可用的代码操作（快速修复、重构）',
     {
@@ -324,7 +333,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Apply Code Action ---
-  server.tool(
+  tool(
     'apply_code_action',
     '按索引应用代码操作（索引来自 get_code_actions 的结果）',
     {
@@ -355,7 +364,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Rename Symbol ---
-  server.tool(
+  tool(
     'rename_symbol',
     '重命名符号及其在整个工作区中的所有引用',
     {
@@ -376,15 +385,15 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
   )
 
   // --- Workspace Info ---
-  server.tool('get_workspace_info', '获取当前 VS Code 工作区的信息', {}, async () => {
+  tool('get_workspace_info', '获取当前 VS Code 工作区的信息', {}, async () => {
     const info = bridge.getWorkspaceInfo()
     return { content: [{ type: 'text', text: JSON.stringify(info) }] }
   })
 
   // --- Execute VS Code Command ---
-  server.tool(
+  tool(
     'execute_vscode_command',
-    '执行任意 VS Code 命令。要求该命令已在 allowedCommands 设置的白名单中。',
+    '执行任意 VS Code 命令。设置 vsmcp.allowedCommands 留空 = 不限制；填了就只允许列表里的命令。',
     {
       command: z.string().describe('要执行的 VS Code 命令 ID'),
       args: z.array(z.unknown()).optional().default([]).describe('传递给命令的参数'),
@@ -398,7 +407,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
 
   // --- Managed Terminals (long-running processes) ---
 
-  server.tool(
+  tool(
     'spawn_terminal',
     '在 VS Code 终端中启动一个长时间运行的进程（开发服务器、watch 模式等）并捕获输出。短命令请改用 run_terminal_command。',
     {
@@ -412,7 +421,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
     })
   )
 
-  server.tool(
+  tool(
     'list_terminals',
     '列出所有托管终端及其状态（存活/已退出、日志大小）',
     {},
@@ -422,7 +431,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
     })
   )
 
-  server.tool(
+  tool(
     'read_terminal',
     '读取托管终端的最近输出。返回输出缓冲区的末尾内容。',
     {
@@ -436,7 +445,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
     })
   )
 
-  server.tool(
+  tool(
     'write_terminal',
     '向托管终端发送输入/文本（例如回答提示、发送命令）',
     {
@@ -451,7 +460,7 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
     })
   )
 
-  server.tool(
+  tool(
     'kill_terminal',
     '终止托管终端及其进程',
     {
@@ -462,5 +471,92 @@ export function registerTools(server: McpServer, bridge: VsCodeBridge, settings:
       if (!ok) throw new Error(`终端 '${id}' 不存在`)
       return { content: [{ type: 'text', text: JSON.stringify({ killed: true }) }] }
     })
+  )
+
+  // --- 增强工具（原 workspace-tools.js）：只读、跳过依赖和凭据、真实路径防越界、校验 workspacePath ---
+
+  const runWorkspaceTool = (name: string) => async (args: Record<string, unknown>) => {
+    try {
+      const result = await workspaceTools.dispatch(name, args)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: (err as Error).message }], isError: true }
+    }
+  }
+  const workspacePath = z.string().describe('先从 workspace_overview 拿到的工作区根路径（workspacePath）。切换项目后旧路径会被拒绝。')
+
+  tool(
+    'workspace_overview',
+    '一次拿到当前工作区路径、顶层目录、Git 摘要和工具用法。开始任务或切换项目后请先调用它。',
+    {},
+    runWorkspaceTool('workspace_overview'),
+  )
+
+  tool(
+    'list_directory',
+    '浏览当前工作区的目录树；默认跳过依赖、构建产物、隐藏目录和常见凭据文件。',
+    {
+      workspacePath,
+      directory: z.string().optional().describe('相对工作区根目录的子目录，默认根目录'),
+      depth: z.number().int().min(1).max(4).optional().describe('展开层数，默认 2'),
+      limit: z.number().int().min(1).max(500).optional().describe('最多返回多少项，默认 200'),
+    },
+    runWorkspaceTool('list_directory'),
+  )
+
+  tool(
+    'find_files',
+    '按 glob 查找工作区文件，例如 **/*.py 或 **/package.json。遵守 .gitignore，最多返回 500 条。',
+    {
+      workspacePath,
+      glob: z.string().describe('glob 模式，例如 **/*.ts'),
+      limit: z.number().int().min(1).max(500).optional().describe('最多返回多少条，默认 200'),
+    },
+    runWorkspaceTool('find_files'),
+  )
+
+  tool(
+    'search_text',
+    '跨文件搜索项目文本，返回相对路径、从 1 开始的行号和匹配行。默认按字面搜索、不分大小写，可指定 glob、大小写和正则。',
+    {
+      workspacePath,
+      query: z.string().describe('单行搜索词'),
+      glob: z.string().optional().describe('只搜匹配这个 glob 的文件，例如 **/*.ts'),
+      regex: z.boolean().optional().describe('按正则搜索'),
+      caseSensitive: z.boolean().optional().describe('区分大小写'),
+      limit: z.number().int().min(1).max(200).optional().describe('最多返回多少条，默认 80'),
+    },
+    runWorkspaceTool('search_text'),
+  )
+
+  tool(
+    'read_files',
+    '一次读最多 10 个磁盘上的文本文件，可指定行范围；返回行号、修改时间和截断信息。读的是已保存的内容，未保存的编辑请用 read_file。',
+    {
+      workspacePath,
+      files: z
+        .array(
+          z.object({
+            path: z.string().describe('相对工作区根目录的路径'),
+            startLine: z.number().int().min(1).optional().describe('起始行（从 1 开始）'),
+            endLine: z.number().int().min(1).optional().describe('结束行（含）'),
+          }),
+        )
+        .min(1)
+        .max(10),
+    },
+    runWorkspaceTool('read_files'),
+  )
+
+  tool(
+    'git_inspect',
+    '只读查看当前项目的 Git 状态、未暂存差异、已暂存差异或最近提交。不会提交、切分支、拉取或推送。',
+    {
+      workspacePath,
+      view: z.enum(['status', 'diff', 'staged', 'log']).describe('status / diff / staged / log'),
+      file: z.string().optional().describe('只看这个文件（相对路径）'),
+      limit: z.number().int().min(1).max(30).optional().describe('log 显示多少条，默认 10'),
+    },
+    runWorkspaceTool('git_inspect'),
   )
 }
