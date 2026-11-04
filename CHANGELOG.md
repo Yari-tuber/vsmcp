@@ -25,6 +25,12 @@
 - `@modelcontextprotocol/sdk` 升到 1.32.2、zod 4；HTTP 超时放宽，长命令不会被掐断；`run_terminal_command` 默认超时 2 分钟（`vsmcp.commandTimeoutMs`），单次最长 1 小时
 - `vsmcp.allowedCommands` 的说明改成和实际行为一致：留空 = 不限制
 
+### 修复
+
+- **Windows 终端**：持续终端改用 PowerShell，通过 Pseudoterminal 接入 VS Code，输入、stdout/stderr 和日志统一为 UTF-8；`kill` / `dispose` 用 `taskkill /T /F` 结束本管理器持有的进程树，避免留下子进程
+- **孤儿 cloudflared**：启动后立即在共享记录中保存 PID、启动时间、metrics 地址和 Hub 端口；新 Hub 接手及启动隧道前先核对 PID 存活与命令行，仅在可执行文件、tunnel 命令及 Hub URL 端口或 metrics 地址匹配时结束该 PID，不按名称批量结束进程
+- **鉴权健康接口隐私**：设置 `vsmcp.authToken` 后，Hub 的 `/health` 和 `/` 只返回 `status`、`service`、`instance`，窗口直连接口只返回 `status`、`service`，不再返回项目名或路径；健康接口仍可匿名访问，未设置令牌时保留原字段
+
 ## [1.0.1] - 2026-09-23
 
 ### 新增
@@ -83,6 +89,32 @@
 
 All notable changes to this project are recorded in this file.
 Versioning follows [Semantic Versioning 2.0.0](https://semver.org/).
+
+## [2.0.0] - 2026-11-05
+
+Renamed to **VSMCP** (`yari.vsmcp`), combining the per-window MCP bridge, multi-window router, workspace panel, and PowerShell watchdog into one extension.
+
+### Added
+
+- **Multi-window routing with a built-in Hub**: each window runs its own MCP server, starting at port 3333, and registers in shared storage. One window owns Hub port 3340; the public tunnel connects to it and requests are forwarded to the selected project. Follow the last focused window or lock a project. Offline targets produce an error without redirecting, duplicate workspaces are rejected, and each request keeps the target selected when it starts. Another window takes over if the Hub closes and restarts the tunnel
+- **Six enhanced tools**: `workspace_overview`, `list_directory`, `find_files`, `search_text`, `read_files`, and `git_inspect`; read-only, with dependency and credential filtering, real-path boundary checks, and workspacePath validation. Search uses VS Code's bundled ripgrep
+- **Theme-aware sidebar control panel** (WebviewView): ChatGPT connection URL, current AI target, click-to-lock project list, connection checks, and copyable prompts; status bar entries for the target project and public access
+- **Automatic recovery**: 90-second startup grace period, at least 60 seconds offline before rebuilding, exponential cooldown from 120 to 600 seconds, and at least 30 seconds between manual recoveries. Layered checks cover project, Hub, tunnel, and public endpoint; state changes are logged
+- MCP annotations on all tools: `readOnlyHint` for read-only tools and `destructiveHint` on five destructive tools
+- node:test unit tests and an isolated VS Code integration script (`npm test`, `npm run e2e`)
+
+### Changed
+
+- Commands and settings now use `vsmcp.*`; `mcpServer.enableCloudflareTunnel` becomes `vsmcp.autoStartTunnel`. `vsmcp.portFallback` now defaults to enabled for multiple windows
+- Authentication is off by default (empty `vsmcp.authToken`), with optional Bearer authentication retained
+- Upgraded `@modelcontextprotocol/sdk` to 1.32.2 and zod to 4; relaxed HTTP timeouts for long commands. `run_terminal_command` defaults to two minutes (`vsmcp.commandTimeoutMs`), with a per-call maximum of one hour
+- Corrected the description of `vsmcp.allowedCommands` to match its behavior: an empty list means unrestricted
+
+### Fixed
+
+- **Windows terminals**: persistent terminals now use PowerShell through a VS Code Pseudoterminal, with UTF-8 input, stdout/stderr, and logs. `kill` / `dispose` use `taskkill /T /F` on process trees owned by the terminal manager so child processes are also stopped
+- **Orphaned cloudflared processes**: persist the PID, start time, metrics address, and Hub port immediately after launch. Before takeover or tunnel startup, verify that the recorded PID is alive and its command line matches the executable, tunnel command, and exact Hub URL port or recorded metrics address; only then terminate that PID, without killing processes by name
+- **Health endpoint privacy with authentication**: when `vsmcp.authToken` is set, Hub `/health` and `/` return only `status`, `service`, and `instance`; direct window endpoints return only `status` and `service`. Project names and paths are omitted. Health endpoints remain anonymously accessible, and the original fields are retained when no token is set
 
 ## [1.0.1] - 2026-09-23
 

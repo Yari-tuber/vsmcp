@@ -9,11 +9,11 @@ tsconfig.json
 esbuild.config.mjs
 **/*.map
 **/*.ts
-CONTEXT.md
 TESTING.md
 DESIGN-vsmcp.md
 IMPLEMENTATION-REPORT.md
 AGENTS.md
+README.en.md
 docs/**
 media/panel-demo.html
 .github/**
