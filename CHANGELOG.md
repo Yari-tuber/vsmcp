@@ -29,6 +29,7 @@
 
 - **Windows 终端**：持续终端改用 PowerShell，通过 Pseudoterminal 接入 VS Code，输入、stdout/stderr 和日志统一为 UTF-8；`kill` / `dispose` 用 `taskkill /T /F` 结束本管理器持有的进程树，避免留下子进程
 - **孤儿 cloudflared**：启动后立即在共享记录中保存 PID、启动时间、metrics 地址和 Hub 端口；新 Hub 接手及启动隧道前先核对 PID 存活与命令行，仅在可执行文件、tunnel 命令及 Hub URL 端口或 metrics 地址匹配时结束该 PID，不按名称批量结束进程
+- **命名隧道连不上**：命名隧道启动时直接带 `--url` 指向本机 Hub 端口，不再依赖 `~/.cloudflared/config.yml` 里的 ingress；三种隧道都固定 `--protocol http2`（走 TCP），避免 QUIC(UDP) 在部分网络被丢弃导致公网 530
 - **鉴权健康接口隐私**：设置 `vsmcp.authToken` 后，Hub 的 `/health` 和 `/` 只返回 `status`、`service`、`instance`，窗口直连接口只返回 `status`、`service`，不再返回项目名或路径；健康接口仍可匿名访问，未设置令牌时保留原字段
 
 ## [1.0.1] - 2026-09-23
@@ -114,6 +115,7 @@ Renamed to **VSMCP** (`yari.vsmcp`), combining the per-window MCP bridge, multi-
 
 - **Windows terminals**: persistent terminals now use PowerShell through a VS Code Pseudoterminal, with UTF-8 input, stdout/stderr, and logs. `kill` / `dispose` use `taskkill /T /F` on process trees owned by the terminal manager so child processes are also stopped
 - **Orphaned cloudflared processes**: persist the PID, start time, metrics address, and Hub port immediately after launch. Before takeover or tunnel startup, verify that the recorded PID is alive and its command line matches the executable, tunnel command, and exact Hub URL port or recorded metrics address; only then terminate that PID, without killing processes by name
+- **Named tunnels**: named tunnels now pass `--url` pointing at the local Hub port, so they no longer depend on ingress rules in `~/.cloudflared/config.yml`; all three tunnel types use `--protocol http2` (TCP) to avoid QUIC (UDP) being dropped on some networks, which caused public 530 errors
 - **Health endpoint privacy with authentication**: when `vsmcp.authToken` is set, Hub `/health` and `/` return only `status`, `service`, and `instance`; direct window endpoints return only `status` and `service`. Project names and paths are omitted. Health endpoints remain anonymously accessible, and the original fields are retained when no token is set
 
 ## [1.0.1] - 2026-09-23
