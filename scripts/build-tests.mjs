@@ -22,6 +22,13 @@ for (const file of entries) {
     target: 'node20',
     sourcemap: 'inline',
     external: ['vscode'],
+    // 终端测试只替换 VS Code 的界面接口，shell 仍是真实的本机子进程。
+    plugins: file === 'terminal.test.ts' ? [{
+      name: 'terminal-vscode-host',
+      setup(build) {
+        build.onResolve({ filter: /^vscode$/ }, () => ({ path: path.join(testDir, 'terminalHost.ts') }))
+      },
+    }] : [],
     define: { __EXT_VERSION__: JSON.stringify(version) },
     logLevel: 'warning',
   })

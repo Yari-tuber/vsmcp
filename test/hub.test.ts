@@ -356,3 +356,139 @@ test('Hub：手动「恢复连接」请求跨窗口传给 Hub', async () => {
 
 // 给类型检查用
 export type _W = WindowRecord
+
+test('health：开启鉴权后只暴露状态和 Hub 实例号，动态关闭后恢复原字段', async () => {
+  const dir = tmpDir('health-private')
+  const shared = new SharedDir(dir)
+  shared.ensure()
+  let token = 'secret'
+  const port = await freePort()
+  const rt = new HubRuntime({
+    shared, sessionId: 'private', windowName: () => '机密项目', hubPort: () => port,
+    version: 'test', authToken: () => token, autoRecover: () => false,
+    tunnel: { createTunnel: () => { throw new Error('不应启动隧道') }, describe: () => ({ provider: 'cloudflare', kind: 'quick', fixed: false }) },
+    log: () => undefined,
+  })
+  try {
+    await rt.tick()
+    for (const endpoint of ['/health', '/']) {
+      const res = await fetch(`http://127.0.0.1:${rt.server.port}${endpoint}`)
+      assert.equal(res.status, 503)
+      assert.deepEqual(await res.json(), { status: 'no_workspace', service: 'vsmcp-hub', instance: rt.server.instance })
+    }
+    shared.writeWindow(win('机密项目', 12345))
+    const health = await fetch(`http://127.0.0.1:${rt.server.port}/health`)
+    assert.equal(health.status, 200)
+    assert.deepEqual(await health.json(), { status: 'ok', service: 'vsmcp-hub', instance: rt.server.instance })
+    token = ''
+    const full = await (await fetch(`http://127.0.0.1:${rt.server.port}/health`)).json() as any
+    assert.equal(full.workspace, '机密项目')
+    assert.equal(full.hub, '机密项目')
+  } finally {
+    await rt.stop()
+    rmrf(dir)
+  }
+})
+
+for (const scenario of [
+  { name: '存活且 URL 端口匹配', alive: true, command: '"C:\\Program Files\\cloudflared.exe" tunnel --url http://127.0.0.1:13340', kill: true },
+  { name: '存活且 metrics 匹配', alive: true, command: 'cloudflared tunnel --metrics 127.0.0.1:19999 run named', kill: true },
+  { name: '端口不同', alive: true, command: 'cloudflared tunnel --url http://127.0.0.1:133400', kill: false },
+  { name: '其他程序参数里提到 cloudflared', alive: true, command: 'node cloudflared tunnel --url http://127.0.0.1:13340', kill: false },
+  { name: 'metrics 不同', alive: true, command: 'cloudflared tunnel --metrics 127.0.0.1:19998 run named', kill: false },
+  { name: '读取命令行失败', alive: true, command: null, kill: false },
+  { name: '已经退出', alive: false, command: 'cloudflared tunnel --url http://127.0.0.1:13340', kill: false },
+]) {
+  test(`孤儿隧道清理：${scenario.name}`, async () => {
+    const dir = tmpDir('orphan')
+    const shared = new SharedDir(dir)
+    shared.ensure()
+    const killed: number[] = []
+    const read: number[] = []
+    // 所有进程操作均注入假函数，绝不访问或结束本机已有的隧道。
+    const rt = new HubRuntime({
+      shared, sessionId: 'new', windowName: () => 'test', hubPort: () => 13340,
+      version: 'test', autoRecover: () => false,
+      orphanProcesses: {
+        isAlive: () => scenario.alive,
+        readCommandLine: async (pid: number) => { read.push(pid); return scenario.command },
+        terminate: async (pid: number) => { killed.push(pid) },
+      },
+      tunnel: { createTunnel: () => { throw new Error('外网关闭') }, describe: () => ({ provider: 'cloudflare', kind: 'quick', fixed: false }) },
+      log: () => undefined,
+    })
+    try {
+      shared.writeTunnel({ phase: 'connected', provider: 'cloudflare', kind: 'quick', url: null, fixed: false, restarts: 0,
+        hubSessionId: 'old', updatedAt: 0, pid: 876543, processStartedAt: 100, hubPort: 13340, metricsAddress: '127.0.0.1:19999' })
+      // 不占用固定端口，直接测真实接手处理路径。
+      await (rt as any).onAcquire()
+      assert.deepEqual(killed, scenario.kill ? [876543] : [])
+      assert.deepEqual(read, scenario.alive ? [876543] : [])
+    } finally {
+      await rt.stop()
+      rmrf(dir)
+    }
+  })
+}
+
+test('隧道进程身份：接手和启动前均清理，公网地址返回前立即保存 PID 和启动时间', async () => {
+  const dir = tmpDir('spawn-record')
+  const shared = new SharedDir(dir)
+  shared.ensure()
+  const port = await freePort()
+  const killed: number[] = []
+  let finish!: (url: string) => void
+  const oldRecord = (pid: number) => ({
+    phase: 'connected' as const, provider: 'cloudflare' as const, kind: 'quick' as const,
+    url: null, fixed: false, restarts: 0, hubSessionId: 'old', updatedAt: 0, pid,
+    processStartedAt: 100, hubPort: port, metricsAddress: null,
+  })
+  const fake: ManagedTunnel & { running: boolean; processInfo: { pid: number; startedAt: number; metricsAddress: string | null } | null } = {
+    url: null, running: false, processInfo: null,
+    start(_port, onSpawn) {
+      assert.deepEqual(killed, [876541, 876542], '必须先清理，再创建进程')
+      this.running = true
+      this.processInfo = { pid: 876543, startedAt: 123456, metricsAddress: '127.0.0.1:19999' }
+      onSpawn?.()
+      return new Promise<string>(resolve => { finish = resolve })
+    },
+    stop() { this.running = false; this.processInfo = null },
+    dispose() {},
+  }
+  const rt = new HubRuntime({
+    shared, sessionId: 'new', windowName: () => 'test', hubPort: () => port, version: 't', autoRecover: () => false,
+    orphanProcesses: {
+      isAlive: () => true,
+      readCommandLine: async () => `cloudflared tunnel --url http://127.0.0.1:${port}`,
+      terminate: async pid => { killed.push(pid) },
+    },
+    tunnel: {
+      createTunnel: () => {
+        // 接手之后、启动之前也出现旧记录，必须再次核对。
+        shared.writeTunnel(oldRecord(876542))
+        return fake
+      },
+      describe: () => ({ provider: 'cloudflare', kind: 'quick', fixed: false }),
+    },
+    probePublic: async () => ({ ok: true }), log: () => undefined,
+  })
+  try {
+    shared.writeTunnel(oldRecord(876541))
+    shared.updateState({ tunnelWanted: true })
+    await rt.tick()
+    await waitFor(() => shared.readTunnel()?.pid === 876543)
+    const record = shared.readTunnel()!
+    assert.equal(record.processStartedAt, 123456)
+    assert.equal(record.metricsAddress, '127.0.0.1:19999')
+    assert.equal(record.hubPort, port)
+    assert.equal(record.url, null, '还没有公网地址时也必须已保存进程身份')
+    finish('https://fake.example.test')
+    await rt.supervisor.settle()
+    await rt.stop()
+    assert.equal(shared.readTunnel()?.pid, null)
+  } finally {
+    finish?.('https://fake.example.test')
+    await rt.stop()
+    rmrf(dir)
+  }
+})

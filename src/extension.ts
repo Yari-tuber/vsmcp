@@ -126,6 +126,7 @@ class VsmcpWindow {
       windowName: () => this.windowName(),
       hubPort: () => this.settings.hubPort,
       version: __EXT_VERSION__,
+      authToken: () => this.settings.authToken,
       autoRecover: () => this.settings.autoRecover,
       tunnel: {
         createTunnel: () => this.createTunnel(),
@@ -369,13 +370,14 @@ class VsmcpWindow {
     const t = new CloudflareTunnel()
     const opts = { name: this.settings.tunnelName, hostname: this.settings.tunnelHostname, token: this.tunnelToken }
     return {
+      get processInfo() { return t.processInfo },
       get url() {
         return t.url
       },
       get running() {
         return t.running
       },
-      start: (port) => t.start(port, opts),
+      start: (port, onSpawn) => t.start(port, opts, onSpawn),
       stop: () => t.stop(),
       dispose: () => t.dispose(),
       readyConnections: () => t.readyConnections(),

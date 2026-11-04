@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { spawn, execFileSync, type ChildProcess } from 'child_process'
 import { log } from '../utils/logger.js'
 
 const MAX_READ_SIZE = 128 * 1024 // Read last 128 KB from log file
@@ -15,6 +16,7 @@ interface ManagedTerminal {
   createdAt: number
   alive: boolean
   disposeListener: vscode.Disposable
+  proc?: ChildProcess
 }
 
 export class TerminalManager {
@@ -59,6 +61,7 @@ export class TerminalManager {
   dispose(): void {
     for (const [, t] of this.terminals) {
       t.disposeListener.dispose()
+      this.killProcessTree(t)
       t.terminal.dispose()
       this.cleanupLogFile(t.logFile)
     }
@@ -80,7 +83,51 @@ export class TerminalManager {
       ? `trap 'rm -f "${logFile}"' EXIT HUP TERM; script -q -f "${logFile}" -c "${shell}"`
       : `trap 'rm -f "${logFile}"' EXIT HUP TERM; script -q -F "${logFile}" "${shell}"`
 
-    const terminal = vscode.window.createTerminal({
+    let proc: ChildProcess | undefined
+    const terminal = process.platform === 'win32' ? (() => {
+      const writeEmitter = new vscode.EventEmitter<string>()
+      const closeEmitter = new vscode.EventEmitter<number>()
+      const system32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')
+      proc = spawn(path.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '-'],
+        { cwd: workingDir, stdio: 'pipe', windowsHide: true })
+      const child = proc
+      let closed = false
+      fs.writeFileSync(logFile, '')
+      const feed = (text: string) => {
+        if (closed) return
+        fs.appendFileSync(logFile, text, 'utf8')
+        writeEmitter.fire(text.replace(/\r?\n/g, '\r\n'))
+      }
+      child.stdout!.setEncoding('utf8').on('data', feed)
+      child.stderr!.setEncoding('utf8').on('data', feed)
+      child.stdin!.on('error', (err) => log.debug('终端', '终端输入已关闭', err.message))
+      child.on('error', (err) => feed(`终端启动失败：${err.message}\n`))
+      child.on('close', (code) => {
+        closed = true
+        const managed = this.terminals.get(id)
+        if (managed) managed.alive = false
+        closeEmitter.fire(code ?? 1)
+      })
+      // 第一行仅用 ASCII，先设编码，再读取后续的 UTF-8 中文命令。
+      child.stdin!.write('[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $OutputEncoding = [Console]::OutputEncoding\n')
+      const pty: vscode.Pseudoterminal = {
+        onDidWrite: writeEmitter.event,
+        onDidClose: closeEmitter.event,
+        open: () => undefined,
+        close: () => {
+          closed = true
+          const managed = this.terminals.get(id)
+          if (managed) this.killProcessTree(managed)
+          writeEmitter.dispose()
+          closeEmitter.dispose()
+        },
+        handleInput: (data) => {
+          if (!closed && child.stdin?.writable) child.stdin.write(data.replace(/\r\n|\r/g, '\n'))
+        },
+      }
+      return vscode.window.createTerminal({ name: displayName, pty })
+    })() : vscode.window.createTerminal({
       name: displayName,
       cwd: workingDir,
       shellPath: '/bin/bash',
@@ -89,7 +136,7 @@ export class TerminalManager {
     terminal.show(true)
 
     // If a command was provided, wait for the shell to be ready before sending
-    if (command) {
+    if (command && !proc) {
       this.waitForReady(logFile, () => {
         terminal.sendText(command, true)
       })
@@ -116,9 +163,11 @@ export class TerminalManager {
       createdAt: Date.now(),
       alive: true,
       disposeListener,
+      proc,
     }
 
     this.terminals.set(id, managed)
+    if (command && proc) this.write(id, command)
     log.info('终端', `已创建终端：${id}（日志：${logFile}）`)
 
     return { id, name: displayName }
@@ -131,6 +180,7 @@ export class TerminalManager {
     cwd: string
     createdAt: number
     logSize: number
+    pid?: number
   }> {
     return Array.from(this.terminals.values()).map(t => ({
       id: t.id,
@@ -139,6 +189,7 @@ export class TerminalManager {
       cwd: t.cwd,
       createdAt: t.createdAt,
       logSize: this.getLogSize(t.logFile),
+      ...(t.proc?.pid ? { pid: t.proc.pid } : {}),
     }))
   }
 
@@ -180,7 +231,10 @@ export class TerminalManager {
   write(id: string, input: string, addNewline = true): boolean {
     const managed = this.terminals.get(id)
     if (!managed || !managed.alive) return false
-    managed.terminal.sendText(input, addNewline)
+    if (managed.proc) {
+      if (!managed.proc.stdin?.writable) return false
+      managed.proc.stdin.write(input + (addNewline ? '\n' : ''))
+    } else managed.terminal.sendText(input, addNewline)
     return true
   }
 
@@ -189,6 +243,16 @@ export class TerminalManager {
     if (!managed) return false
 
     log.info('终端', `正在终止终端：${id}`)
+
+    if (managed.proc) {
+      this.killProcessTree(managed)
+      managed.alive = false
+      managed.disposeListener.dispose()
+      managed.terminal.dispose()
+      this.terminals.delete(id)
+      this.cleanupLogFile(managed.logFile)
+      return true
+    }
 
     // Send exit to the script session, then dispose the terminal
     if (managed.alive) {
@@ -204,6 +268,15 @@ export class TerminalManager {
     managed.disposeListener.dispose()
     this.terminals.delete(id)
     return true
+  }
+
+  private killProcessTree(managed: ManagedTerminal): void {
+    const proc = managed.proc
+    if (!managed.alive || !proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return
+    // 仅结束本管理器创建并持有句柄的进程树，绝不按进程名批量清理。
+    execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'),
+      ['/T', '/F', '/PID', String(proc.pid)], { windowsHide: true, stdio: 'pipe', timeout: 5000 })
+    managed.alive = false
   }
 
   // Poll the log file until content appears (shell has started), then fire callback

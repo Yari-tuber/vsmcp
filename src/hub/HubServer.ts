@@ -16,6 +16,7 @@ export type HubLog = (level: 'info' | 'warn' | 'error', message: string) => void
 export interface HubServerOptions {
   resolveRoute: () => RouteResult
   version: string
+  authToken?: () => string
   /** /health 里附带的额外信息（Hub 窗口名等） */
   extraHealth?: () => Record<string, unknown>
   log?: HubLog
@@ -115,6 +116,12 @@ export class HubServer {
 
   health(): { code: number; body: Record<string, unknown> } {
     const route = this.opts.resolveRoute()
+    if (this.opts.authToken?.()) {
+      return {
+        code: route.target ? 200 : 503,
+        body: { status: route.target ? 'ok' : 'no_workspace', service: 'vsmcp-hub', instance: this._instance },
+      }
+    }
     return {
       code: route.target ? 200 : 503,
       body: {

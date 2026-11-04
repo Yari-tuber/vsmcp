@@ -204,7 +204,7 @@ export class HttpServer {
     const pathname = (req.url ?? '/').split('?')[0]
     if (pathname === '/health' || pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
+      res.end(JSON.stringify(this.settings.authToken ? { status: 'ok', service: 'vsmcp-window' } : {
         status: 'ok',
         service: 'vsmcp-window',
         version: __EXT_VERSION__,

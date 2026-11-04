@@ -10,6 +10,7 @@ import { HubElection, HubServer, type HubLog } from './HubServer.js'
 import { selectTarget, type RouteResult } from './route.js'
 import { ONLINE_TTL_MS, type HubRecord, type SharedDir } from './registry.js'
 import { TunnelSupervisor, type SupervisorDeps } from '../tunnel/TunnelSupervisor.js'
+import { cleanupOrphanTunnel, type OrphanProcessDeps } from '../tunnel/orphanProcess.js'
 import { classify, DiagnosticsRecorder, type Diagnosis, type HubStatus } from '../diagnostics/diagnostics.js'
 
 export interface HubRuntimeOptions {
@@ -19,6 +20,8 @@ export interface HubRuntimeOptions {
   windowName: () => string
   hubPort: () => number
   version: string
+  authToken?: () => string
+  orphanProcesses?: OrphanProcessDeps
   autoRecover: () => boolean
   tunnel: Omit<SupervisorDeps, 'probePublic' | 'now' | 'log'>
   log: HubLog
@@ -68,6 +71,7 @@ export class HubRuntime {
     this.server = new HubServer({
       resolveRoute: () => this.route(),
       version: opts.version,
+      authToken: opts.authToken,
       extraHealth: () => ({ hub: opts.windowName() }),
       log: opts.log,
     })
@@ -76,6 +80,8 @@ export class HubRuntime {
       now,
       log: opts.log,
       probePublic: (url) => (opts.probePublic ?? defaultProbePublic)(url, this.server.instance),
+      beforeStart: () => this.cleanupOrphan(),
+      onProcessStarted: () => this.writeTunnel(),
     })
     this.election = new HubElection({
       server: this.server,
@@ -172,7 +178,7 @@ export class HubRuntime {
     })
   }
 
-  private onAcquire(): void {
+  private async onAcquire(): Promise<void> {
     this.since = this.now()
     // 当上 Hub 之前积压的「恢复连接」请求不重放
     const st = this.opts.shared.readState()
@@ -180,7 +186,22 @@ export class HubRuntime {
     this.lastConfigHandled = st.tunnelConfigAt ?? 0
     const prevTunnel = this.opts.shared.readTunnel()
     this.supervisor.seedLastUrl(prevTunnel?.url ?? prevTunnel?.previousUrl)
+    await this.cleanupOrphan()
     this.writeHub()
+  }
+
+  private async cleanupOrphan(): Promise<void> {
+    const record = this.opts.shared.readTunnel()
+    const killed = await cleanupOrphanTunnel(record, this.opts.hubPort(), this.opts.orphanProcesses)
+    if (killed && record) {
+      this.opts.log('info', `已结束核对匹配的旧隧道进程（PID ${record.pid}）`)
+      this.opts.shared.writeTunnel({ ...record, pid: null, processStartedAt: null, metricsAddress: null, updatedAt: this.now() })
+    }
+  }
+
+  private writeTunnel(): void {
+    this.opts.shared.writeTunnel({ ...this.supervisor.status(), hubSessionId: this.opts.sessionId,
+      hubPort: this.server.port, updatedAt: this.now() })
   }
 
   private onRelease(): void {
@@ -190,7 +211,8 @@ export class HubRuntime {
     const cur = s.readTunnel()
     if (cur && cur.hubSessionId === this.opts.sessionId) {
       // 地址留在 previousUrl 里：接手的 Hub 重开临时隧道后能看出地址变了
-      s.writeTunnel({ ...cur, phase: 'off', url: null, previousUrl: cur.url ?? cur.previousUrl ?? null, hubSessionId: this.opts.sessionId, updatedAt: this.now() })
+      s.writeTunnel({ ...cur, phase: 'off', url: null, pid: null, processStartedAt: null, metricsAddress: null,
+        previousUrl: cur.url ?? cur.previousUrl ?? null, hubSessionId: this.opts.sessionId, updatedAt: this.now() })
     }
   }
 
@@ -213,7 +235,7 @@ export class HubRuntime {
       if (state.tunnelWanted) this.supervisor.requestManual()
     }
     await this.supervisor.tick(this.server.port)
-    s.writeTunnel({ ...this.supervisor.status(), hubSessionId: this.opts.sessionId, updatedAt: this.now() })
+    this.writeTunnel()
     const diagnosis = this.diagnose()
     const prev = this.lastDiagnosis?.code
     this.lastDiagnosis = diagnosis

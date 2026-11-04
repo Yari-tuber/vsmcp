@@ -7,9 +7,10 @@ import { decide, initialPolicyState, type PolicyState } from './recoveryPolicy.j
 import type { TunnelPhase, TunnelRecord } from '../hub/registry.js'
 
 export interface ManagedTunnel {
+  readonly processInfo?: { pid: number; startedAt: number; metricsAddress: string | null } | null
   readonly url: string | null
   readonly running: boolean
-  start(port: number): Promise<string>
+  start(port: number, onSpawn?: () => void): Promise<string>
   stop(): void
   dispose(): void
   /** cloudflared 的边缘连接数（metrics /ready）；拿不到返回 null */
@@ -36,6 +37,8 @@ export type TunnelEvent =
   | { type: 'restart'; reason: string }
 
 export interface SupervisorDeps {
+  beforeStart?(): Promise<void>
+  onProcessStarted?(): void
   createTunnel(): ManagedTunnel
   describe(): TunnelDescription
   now?(): number
@@ -243,9 +246,13 @@ export class TunnelSupervisor {
     this.probe = null
     this.probeFailures = 0
     this.lastProbeAt = 0
-    const p: Promise<void> = t.start(port).then(
+    const p: Promise<void> = (async () => {
+      await this.deps.beforeStart?.()
+      if (this.tunnel !== t) return null
+      return t.start(port, () => this.deps.onProcessStarted?.())
+    })().then(
       (url) => {
-        if (this.tunnel !== t) return
+        if (this.tunnel !== t || !url) return
         const prev = this.noteUrl(url, this.now())
         this.connected = true
         this.deps.log?.('info', `隧道已建立：${url}`)
@@ -317,6 +324,9 @@ export class TunnelSupervisor {
     else phase = 'disconnected'
     const url = alive && this.tunnel?.url ? this.tunnel.url : this.desc.fixed && this.wanted ? this.lastUrl : null
     return {
+      pid: this.tunnel?.processInfo?.pid ?? null,
+      processStartedAt: this.tunnel?.processInfo?.startedAt ?? null,
+      metricsAddress: this.tunnel?.processInfo?.metricsAddress ?? null,
       phase,
       provider: this.desc.provider,
       kind: this.desc.kind,

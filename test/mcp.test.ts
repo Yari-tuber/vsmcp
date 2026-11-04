@@ -173,6 +173,25 @@ test('鉴权：authToken 留空不鉴权；填了就要 Bearer', async () => {
   }
 })
 
+test('窗口 health：authToken 动态启用时不返回项目名或路径', async () => {
+  const dir = fs.realpathSync(tmpDir('health-auth'))
+  const settings = fakeSettings('')
+  const s = makeWindow(dir, '机密项目', settings)
+  const port = await s.start(await freePort(), false)
+  try {
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json() as any).workspace, '机密项目')
+    settings.authToken = 'secret'
+    for (const endpoint of ['/health', '/']) {
+      const res = await fetch(`http://127.0.0.1:${port}${endpoint}`)
+      assert.equal(res.status, 200)
+      assert.deepEqual(await res.json(), { status: 'ok', service: 'vsmcp-window' })
+    }
+  } finally {
+    await s.stop()
+    rmrf(dir)
+  }
+})
+
 test('窗口端口：被占用时顺延、跳过 Hub 端口；不顺延时报 PortInUseError', async () => {
   const dir = fs.realpathSync(tmpDir('ports'))
   const s1 = makeWindow(dir, 'p1')

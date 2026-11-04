@@ -79,6 +79,14 @@ export class CloudflareTunnel {
   private killed = new Set<ChildProcess>()
   /** cloudflared metrics 端口（/ready 返回边缘连接数），0 = 没开 */
   private metricsPort = 0
+  private processStartedAt: number | null = null
+
+  get processInfo(): { pid: number; startedAt: number; metricsAddress: string | null } | null {
+    return this.proc?.pid && this.processStartedAt !== null ? {
+      pid: this.proc.pid, startedAt: this.processStartedAt,
+      metricsAddress: this.metricsPort ? `127.0.0.1:${this.metricsPort}` : null,
+    } : null
+  }
 
   /** 当前获取到的公网根地址（隧道未运行或尚未获取到时为 null） */
   get url(): string | null {
@@ -102,7 +110,7 @@ export class CloudflareTunnel {
    *    公网地址固定为 https://<hostname>。
    * 3. 临时隧道（默认）：trycloudflare.com 快速隧道，地址每次启动随机生成、无法固定。
    */
-  async start(port: number, opts: { name?: string; hostname?: string; token?: string } = {}): Promise<string> {
+  async start(port: number, opts: { name?: string; hostname?: string; token?: string } = {}, onSpawn?: () => void): Promise<string> {
     if (this.proc) this.stop()
 
     const bin = resolveCloudflared()
@@ -150,6 +158,7 @@ export class CloudflareTunnel {
 
     const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     this.proc = proc
+    this.processStartedAt = Date.now()
     this._url = isToken || isNamed ? `https://${hostname}` : null
 
     return await new Promise<string>((resolve, reject) => {
@@ -215,6 +224,13 @@ export class CloudflareTunnel {
           log.info('隧道', `cloudflared 进程已退出（退出码 ${code}${killedByUs ? '，主动停止' : ''}）`)
         }
       })
+
+      // 进程一创建就落盘，不能等公网地址返回或下一轮心跳。
+      try { onSpawn?.() } catch (err) {
+        this.stop()
+        finish(() => reject(err))
+        return
+      }
 
       if (isToken || isNamed) {
         // 公网地址由配置决定、已知，等待一小段时间确认进程稳定（令牌/配置无效时 cloudflared 会快速退出）

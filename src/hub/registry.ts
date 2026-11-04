@@ -69,6 +69,11 @@ export interface HubRecord {
 export type TunnelPhase = 'off' | 'starting' | 'connected' | 'disconnected' | 'error'
 
 export interface TunnelRecord {
+  /** 实际 cloudflared 子进程身份；旧版本记录可能没有这些字段。 */
+  pid?: number | null
+  processStartedAt?: number | null
+  metricsAddress?: string | null
+  hubPort?: number
   phase: TunnelPhase
   provider: 'cloudflare' | 'localtunnel'
   kind: 'quick' | 'token' | 'named' | 'localtunnel'
