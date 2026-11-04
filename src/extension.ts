@@ -162,7 +162,7 @@ class VsmcpWindow {
     log.info('扩展', this.rgPath ? `搜索用 VS Code 自带的 ripgrep：${this.rgPath}` : '没找到 VS Code 自带的 ripgrep，增强工具退回逐文件扫描')
 
     ctx.subscriptions.push(
-      vscode.workspace.registerFileSystemProvider('vscode-mcp-preview', this.bridge.memFs, { isCaseSensitive: true, isReadonly: true }),
+      vscode.workspace.registerFileSystemProvider('vsmcp-preview', this.bridge.memFs, { isCaseSensitive: true, isReadonly: true }),
       vscode.window.registerWebviewViewProvider(PanelProvider.viewId, this.panel, { webviewOptions: { retainContextWhenHidden: false } }),
     )
     if (this.settings.enableContextPush) this.pusher.start()

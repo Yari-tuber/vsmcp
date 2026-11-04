@@ -239,6 +239,8 @@ async function run() {
   check('get_workspace_info（上游工具）', info.data?.folders?.[0]?.path?.toLowerCase() === ov.data?.workspacePath?.toLowerCase(), JSON.stringify(info.data))
   const rf = await callTool('read_file', { filePath: path.join(ov.data?.workspacePath ?? '', 'src', 'beta.ts') })
   check('read_file（上游工具，走 VS Code 文档 API）', /who = 'beta'/.test(rf.data?.content ?? ''), JSON.stringify(rf.data))
+  const diff = await callTool('show_diff', { filePath: path.join(ov.data?.workspacePath ?? '', 'src', 'beta.ts'), newContent: "export const who = 'beta (改)'\n" })
+  check('show_diff（上游工具，内存文件系统 vsmcp-preview: 打开差异编辑器）', diff.data?.shown === true, JSON.stringify(diff.data ?? diff.text))
   const echo = await callTool('run_terminal_command', { command: 'echo vsmcp-ok' })
   check('run_terminal_command（上游工具）', /vsmcp-ok/.test(echo.data?.stdout ?? ''), JSON.stringify(echo.data))
   const t1 = Date.now()

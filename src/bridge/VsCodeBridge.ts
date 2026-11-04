@@ -255,7 +255,7 @@ export class VsCodeBridge {
 
   async showDiff(filePath: string, newContent: string, title?: string) {
     const originalUri = vscode.Uri.file(filePath)
-    const previewUri = vscode.Uri.parse(`vscode-mcp-preview:${filePath}`)
+    const previewUri = vscode.Uri.parse(`vsmcp-preview:${filePath}`)
     this.memFs.writeFile(previewUri, Buffer.from(newContent, 'utf-8'))
     const label = title ?? `建议更改：${path.basename(filePath)}`
     await vscode.commands.executeCommand('vscode.diff', originalUri, previewUri, label, { preview: true })
@@ -373,7 +373,7 @@ export class VsCodeBridge {
 
   private runViaShellIntegration(command: string, cwd: string, timeoutMs: number): Promise<TerminalResult> {
     return new Promise((resolve, reject) => {
-      const terminal = vscode.window.createTerminal({ name: 'MCP 智能体', cwd })
+      const terminal = vscode.window.createTerminal({ name: 'VSMCP 智能体', cwd })
       terminal.show()
       terminal.sendText(command)
 

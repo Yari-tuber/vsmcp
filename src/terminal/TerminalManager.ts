@@ -21,26 +21,38 @@ export class TerminalManager {
   private terminals = new Map<string, ManagedTerminal>()
   private nextId = 1
   private logDir: string
+  private baseDir: string
 
   constructor() {
-    this.logDir = path.join(os.tmpdir(), 'vscode-mcp-terminals')
+    // 每个窗口（扩展宿主进程）一个子目录：多开窗口时互不删对方正在用的日志。
+    // 目录名用 vsmcp-terminals，不碰上游插件的 vscode-mcp-terminals。
+    this.baseDir = path.join(os.tmpdir(), 'vsmcp-terminals')
+    this.logDir = path.join(this.baseDir, String(process.pid))
     fs.mkdirSync(this.logDir, { recursive: true })
-    this.cleanupStaleLogFiles()
+    this.cleanupStaleLogDirs()
   }
 
-  private cleanupStaleLogFiles(): void {
+  /** 只清理已经退出的窗口留下的日志目录 */
+  private cleanupStaleLogDirs(): void {
     try {
-      const files = fs.readdirSync(this.logDir)
-      for (const file of files) {
-        const filePath = path.join(this.logDir, file)
-        fs.unlinkSync(filePath)
-        log.debug('终端', `已清理残留日志文件：${file}`)
+      let removed = 0
+      for (const name of fs.readdirSync(this.baseDir)) {
+        const pid = Number(name)
+        if (!Number.isInteger(pid) || pid === process.pid) continue
+        let alive = false
+        try {
+          process.kill(pid, 0)
+          alive = true
+        } catch (err) {
+          alive = (err as NodeJS.ErrnoException).code === 'EPERM'
+        }
+        if (alive) continue
+        fs.rmSync(path.join(this.baseDir, name), { recursive: true, force: true })
+        removed++
       }
-      if (files.length > 0) {
-        log.info('终端', `已清理上次会话遗留的 ${files.length} 个日志文件`)
-      }
+      if (removed > 0) log.info('终端', `已清理 ${removed} 个已关闭窗口留下的终端日志目录`)
     } catch {
-      // Ignore errors during cleanup
+      // 清理失败不影响使用
     }
   }
 
