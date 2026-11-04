@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VSMCP 面板演示（假数据，截图用）</title>
+<!--
+  直接用浏览器打开这个文件即可（file:// 也行）。
+  每个侧栏里都是真的 media/panel.html，只是数据是这里编的假数据、主题变量是模拟的 VS Code 深色 / 浅色主题。
+  截图：选好场景和主题，对着中间的侧栏截。按钮可以点（开关外网、锁定项目会跟着变）。
+-->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif; background: #e9ebef; color: #1f2328; }
+  body.dark-page { background: #0e1014; color: #d0d4da; }
+  header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 14px 20px; border-bottom: 1px solid rgba(127,127,127,.25); position: sticky; top: 0; background: inherit; z-index: 2; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; }
+  .group { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .group span { opacity: .65; margin-right: 4px; }
+  .group button { border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; padding: 4px 10px; border-radius: 999px; cursor: pointer; font: inherit; }
+  .group button.on { background: #0078d4; border-color: #0078d4; color: #fff; }
+  .stage { display: flex; gap: 28px; justify-content: center; align-items: flex-start; padding: 28px 20px 60px; flex-wrap: wrap; }
+  .shell { width: 380px; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.18); display: flex; }
+  .activity { width: 46px; display: flex; flex-direction: column; align-items: center; gap: 18px; padding-top: 14px; }
+  .activity i { width: 22px; height: 22px; border-radius: 5px; opacity: .45; border: 2px solid currentColor; display: block; }
+  .activity i.on { opacity: 1; border-color: transparent; background: currentColor; -webkit-mask: none; position: relative; }
+  .side { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .side .title { height: 35px; display: flex; align-items: center; padding: 0 16px; font-size: 11px; letter-spacing: .6px; font-weight: 600; text-transform: uppercase; }
+  .side iframe { border: 0; width: 100%; height: 1120px; display: block; }
+  .theme-dark { background: #181818; color: #cccccc; }
+  .theme-dark .activity { background: #181818; color: #858585; border-right: 1px solid #2b2b2b; }
+  .theme-dark .activity i.on { color: #d7d7d7; }
+  .theme-dark .title { color: #cccccc; border-bottom: 1px solid #2b2b2b; }
+  .theme-light { background: #f8f8f8; color: #3b3b3b; }
+  .theme-light .activity { background: #f8f8f8; color: #616161; border-right: 1px solid #e5e5e5; }
+  .theme-light .activity i.on { color: #1f1f1f; }
+  .theme-light .title { color: #3b3b3b; border-bottom: 1px solid #e5e5e5; }
+  .cap { text-align: center; font-size: 12px; opacity: .6; margin-top: 10px; }
+  .log { position: fixed; right: 14px; bottom: 12px; font: 11.5px/1.4 Consolas, monospace; opacity: .7; max-width: 46vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VSMCP 面板演示</h1>
+  <div class="group" id="scenes"><span>场景</span></div>
+  <div class="group" id="themes"><span>主题</span></div>
+</header>
+<div class="stage" id="stage"></div>
+<div class="log" id="log"></div>
+
+<script>
+(function () {
+  'use strict'
+  var THEMES = {
+    dark: {
+      className: 'vscode-dark',
+      vars: {
+        '--vscode-foreground': '#cccccc', '--vscode-descriptionForeground': '#9d9d9d', '--vscode-sideBar-background': '#181818',
+        '--vscode-widget-border': '#2f2f2f', '--vscode-button-background': '#0078d4', '--vscode-button-foreground': '#ffffff',
+        '--vscode-button-hoverBackground': '#026ec1', '--vscode-button-secondaryBackground': '#313131', '--vscode-button-secondaryForeground': '#cccccc',
+        '--vscode-button-secondaryHoverBackground': '#3c3c3c', '--vscode-testing-iconPassed': '#73c991', '--vscode-editorWarning-foreground': '#cca700',
+        '--vscode-errorForeground': '#f85149', '--vscode-textLink-foreground': '#4daafc', '--vscode-focusBorder': '#0078d4',
+        '--vscode-list-hoverBackground': '#2a2d2e', '--vscode-input-background': '#202020', '--vscode-badge-background': '#616161',
+        '--vscode-badge-foreground': '#f8f8f8', '--vscode-notifications-background': '#1f1f1f', '--vscode-notifications-foreground': '#cccccc',
+        '--vscode-font-family': '"Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif', '--vscode-font-size': '13px',
+        '--vscode-editor-font-family': 'Consolas, "Cascadia Code", "Courier New", monospace'
+      }
+    },
+    light: {
+      className: 'vscode-light',
+      vars: {
+        '--vscode-foreground': '#3b3b3b', '--vscode-descriptionForeground': '#6f6f6f', '--vscode-sideBar-background': '#f8f8f8',
+        '--vscode-widget-border': '#e3e3e3', '--vscode-button-background': '#005fb8', '--vscode-button-foreground': '#ffffff',
+        '--vscode-button-hoverBackground': '#0258a8', '--vscode-button-secondaryBackground': '#e5e5e5', '--vscode-button-secondaryForeground': '#3b3b3b',
+        '--vscode-button-secondaryHoverBackground': '#cccccc', '--vscode-testing-iconPassed': '#2e8a45', '--vscode-editorWarning-foreground': '#b07a00',
+        '--vscode-errorForeground': '#d1242f', '--vscode-textLink-foreground': '#005fb8', '--vscode-focusBorder': '#005fb8',
+        '--vscode-list-hoverBackground': '#efefef', '--vscode-input-background': '#ffffff', '--vscode-badge-background': '#cccccc',
+        '--vscode-badge-foreground': '#3b3b3b', '--vscode-notifications-background': '#ffffff', '--vscode-notifications-foreground': '#3b3b3b',
+        '--vscode-font-family': '"Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif', '--vscode-font-size': '13px',
+        '--vscode-editor-font-family': 'Consolas, "Cascadia Code", "Courier New", monospace'
+      }
+    }
+  }
+
+  var now = Date.now()
+  var PROJECTS = [
+    { key: '["d:/code/my-blog"]', sessionId: 's1', name: 'my-blog', path: 'D:\\code\\my-blog', extraRoots: 0, port: 3333, focusedAt: now - 20000 },
+    { key: '["d:/code/shop-api"]', sessionId: 's2', name: 'shop-api', path: 'D:\\code\\shop-api', extraRoots: 0, port: 3334, focusedAt: now - 300000 },
+    { key: '["d:/code/landing-page"]', sessionId: 's3', name: 'landing-page', path: 'D:\\code\\landing-page', extraRoots: 1, port: 3335, focusedAt: now - 900000 }
+  ]
+
+  function diag(code) {
+    var D = {
+      healthy: ['ok', '项目、Hub、隧道、公网都正常', '可以在 ChatGPT 里用了；如果 ChatGPT 报 FORBIDDEN，检查那个会话的连接器权限。', { workspace: 'ok', hub: 'ok', tunnel: 'ok', public: 'ok' }],
+      tunnel_off: ['info', '本机一切正常，外网没开', '要给网页版 ChatGPT 用，点「开启外网」。', { workspace: 'ok', hub: 'ok', tunnel: 'off', public: 'off' }],
+      tunnel_starting: ['info', '正在建立外网隧道…', '一般十几秒，地址出来会显示在上面。', { workspace: 'ok', hub: 'ok', tunnel: 'checking', public: 'checking' }],
+      tunnel_disconnected: ['error', '本机项目正常，但外网隧道没有可用连接', '断开满 60 秒会自动重建；网络一直不好时重试间隔会拉长（120 秒起翻倍，最长 10 分钟）。也可以点「恢复连接」。', { workspace: 'ok', hub: 'ok', tunnel: 'error', public: 'checking' }],
+      workspace_unavailable: ['warning', '锁定的项目「shop-api」现在没打开（不会改投别的项目）。请打开它，或在面板里换一个项目。', '打开锁定的项目，或在面板里明确选另一个项目；不会自动改投。', { workspace: 'warn', hub: 'ok', tunnel: 'ok', public: 'ok' }],
+      duplicate: ['warning', '「my-blog」同时开了 2 个窗口，没法判断用哪个。请关掉重复的窗口。', '打开锁定的项目，或在面板里明确选另一个项目；不会自动改投。', { workspace: 'warn', hub: 'ok', tunnel: 'ok', public: 'ok' }],
+      tunnel_error: ['error', '外网开不起来：没装 cloudflared', '点「安装 cloudflared」一键安装，装好后点「恢复连接」；也可以在设置里把 vsmcp.tunnelProvider 换成 localtunnel（不用装）。', { workspace: 'ok', hub: 'ok', tunnel: 'error', public: 'off' }]
+    }
+    var d = D[code]
+    return { code: code === 'duplicate' ? 'workspace_unavailable' : code, level: d[0], message: d[1], action: d[2], layers: d[3] }
+  }
+
+  function baseState() {
+    return {
+      version: '2.0.0',
+      now: Date.now(),
+      self: { sessionId: 's1', name: 'my-blog', port: 3333, hasFolders: true, isHub: true, agents: 0, key: PROJECTS[0].key },
+      hub: { status: 'self', port: 3340, name: 'my-blog', since: now - 3600000 },
+      route: { mode: 'auto', code: 'ok', reason: null, desiredName: 'my-blog', target: { name: 'my-blog', path: 'D:\\code\\my-blog', port: 3333, key: PROJECTS[0].key, isSelf: true } },
+      projects: PROJECTS.map(function (p, i) { return Object.assign({}, p, { isTarget: i === 0, isSelf: i === 0, isHub: i === 0, duplicate: false }) }),
+      tunnel: { wanted: true, phase: 'connected', provider: 'cloudflare', kind: 'quick', fixed: false, url: 'https://quiet-river-cafe-lamp.trycloudflare.com/mcp', urlChanged: false, lastError: null, errorCode: null, restarts: 0, nextRetryAt: null, connections: 4, startedAt: now - 1260000, probe: { ok: true, at: now - 12000 } },
+      local: { windowUrl: 'http://127.0.0.1:3333/mcp', hubUrl: 'http://127.0.0.1:3340/mcp' },
+      diagnosis: diag('healthy'),
+      auth: { enabled: false },
+      tokenSet: false,
+      search: 'ripgrep'
+    }
+  }
+
+  function setTarget(s, idx, mode) {
+    s.route.mode = mode
+    s.projects.forEach(function (p, i) { p.isTarget = i === idx })
+    var p = s.projects[idx]
+    s.route.target = { name: p.name, path: p.path, port: p.port, key: p.key, isSelf: p.isSelf }
+    s.route.desiredName = p.name
+    return s
+  }
+
+  var SCENES = {
+    '外网已开': function () { return baseState() },
+    '锁定项目': function () { return setTarget(baseState(), 1, 'manual') },
+    '外网未开': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { wanted: false, phase: 'off', url: null, connections: null, startedAt: null, probe: null })
+      s.diagnosis = diag('tunnel_off')
+      return s
+    },
+    '正在建立': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { phase: 'starting', url: null, connections: null, startedAt: null, probe: null })
+      s.diagnosis = diag('tunnel_starting')
+      return s
+    },
+    '断线重连': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { phase: 'disconnected', connections: 0, restarts: 2, nextRetryAt: Date.now() + 97000, probe: { ok: false, at: Date.now() - 20000 } })
+      s.diagnosis = diag('tunnel_disconnected')
+      return s
+    },
+    '地址变了': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { url: 'https://brave-ocean-tiger-moss.trycloudflare.com/mcp', urlChanged: true, restarts: 1, startedAt: Date.now() - 40000 })
+      return s
+    },
+    '项目离线': function () {
+      var s = baseState()
+      s.route = { mode: 'manual', code: 'offline', reason: '锁定的项目「shop-api」现在没打开（不会改投别的项目）。请打开它，或在面板里换一个项目。', desiredName: 'shop-api', target: null }
+      s.projects = s.projects.filter(function (p) { return p.name !== 'shop-api' }).map(function (p) { return Object.assign(p, { isTarget: false }) })
+      s.diagnosis = diag('workspace_unavailable')
+      return s
+    },
+    '多开冲突': function () {
+      var s = baseState()
+      var dup = Object.assign({}, PROJECTS[0], { sessionId: 's9', port: 3336, isTarget: false, isSelf: false, isHub: false, duplicate: true })
+      s.projects[0].duplicate = true
+      s.projects[0].isTarget = false
+      s.projects.splice(1, 0, dup)
+      s.route = { mode: 'auto', code: 'duplicate', reason: '「my-blog」同时开了 2 个窗口，没法判断用哪个。请关掉重复的窗口。', desiredName: 'my-blog', target: null }
+      s.diagnosis = diag('duplicate')
+      return s
+    },
+    '没装 cloudflared': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { phase: 'error', url: null, connections: null, startedAt: null, probe: null, lastError: '没装 cloudflared', errorCode: 'cloudflared_missing' })
+      s.diagnosis = diag('tunnel_error')
+      return s
+    },
+    '固定域名': function () {
+      var s = baseState()
+      s.tunnel = Object.assign(s.tunnel, { kind: 'token', fixed: true, url: 'https://mcp.example.com/mcp', connections: 4 })
+      s.tokenSet = true
+      return s
+    }
+  }
+
+  var sceneName = '外网已开'
+  var themeMode = 'both'
+  var state = SCENES[sceneName]()
+  var frames = []
+
+  function post(frame, msg) { try { frame.contentWindow.postMessage(msg, '*') } catch (e) { /* 忽略 */ } }
+  function pushAll() {
+    state.now = Date.now()
+    frames.forEach(function (f) { post(f.el, { type: 'state', state: state }) })
+  }
+
+  function build() {
+    var stage = document.getElementById('stage')
+    stage.innerHTML = ''
+    frames = []
+    var list = themeMode === 'both' ? ['dark', 'light'] : [themeMode]
+    document.body.classList.toggle('dark-page', themeMode === 'dark')
+    list.forEach(function (t) {
+      var wrap = document.createElement('div')
+      wrap.innerHTML = '<div class="shell theme-' + t + '"><div class="activity"><i></i><i></i><i></i><i class="on"></i></div><div class="side"><div class="title">VSMCP: 控制台</div></div></div><div class="cap">' + (t === 'dark' ? 'Dark Modern' : 'Light Modern') + '</div>'
+      var iframe = document.createElement('iframe')
+      iframe.src = 'panel.html'
+      iframe.title = 'VSMCP 面板（' + t + '）'
+      wrap.querySelector('.side').appendChild(iframe)
+      stage.appendChild(wrap)
+      var f = { el: iframe, theme: t }
+      frames.push(f)
+      iframe.addEventListener('load', function () {
+        post(iframe, { type: 'theme', vars: THEMES[t].vars, className: THEMES[t].className })
+        post(iframe, { type: 'state', state: state })
+      })
+    })
+  }
+
+  function buttons(id, items, cur, onPick) {
+    var g = document.getElementById(id)
+    Array.prototype.slice.call(g.querySelectorAll('button')).forEach(function (b) { b.remove() })
+    items.forEach(function (it) {
+      var b = document.createElement('button')
+      b.textContent = it[1]
+      if (it[0] === cur) b.className = 'on'
+      b.onclick = function () { onPick(it[0]) }
+      g.appendChild(b)
+    })
+  }
+  function renderControls() {
+    buttons('scenes', Object.keys(SCENES).map(function (k) { return [k, k] }), sceneName, function (k) { sceneName = k; state = SCENES[k](); renderControls(); pushAll() })
+    buttons('themes', [['both', '深浅并排'], ['dark', '深色'], ['light', '浅色']], themeMode, function (k) { themeMode = k; renderControls(); build() })
+  }
+
+  // 面板里点的按钮：让假数据跟着变，点起来像真的
+  window.addEventListener('message', function (e) {
+    var m = e.data
+    if (m && m.type === 'vsmcp-demo-height') {
+      frames.forEach(function (f) { if (f.el.contentWindow === e.source) f.el.style.height = Math.max(400, Math.ceil(m.height) + 6) + 'px' })
+      return
+    }
+    if (!m || m.type !== 'vsmcp-demo-action') return
+    var a = m.msg
+    document.getElementById('log').textContent = '面板发出：' + JSON.stringify(a)
+    if (a.type === 'lock') {
+      var idx = state.projects.findIndex(function (p) { return p.key === a.key && !p.duplicate || (p.key === a.key && p.sessionId === 's1') })
+      if (idx >= 0) { setTarget(state, idx, 'manual'); state.diagnosis = diag('healthy') }
+    } else if (a.type === 'run') {
+      if (a.command === 'vsmcp.startTunnel') {
+        state = SCENES['正在建立'](); pushAll()
+        setTimeout(function () { state = SCENES['外网已开'](); pushAll() }, 1600)
+        return
+      }
+      if (a.command === 'vsmcp.stopTunnel') state = SCENES['外网未开']()
+      if (a.command === 'vsmcp.autoFollow') { setTarget(state, 0, 'auto') }
+      if (a.command === 'vsmcp.lockCurrent') { setTarget(state, 0, 'manual') }
+      if (a.command === 'vsmcp.recover') { state = SCENES['外网已开']() }
+    } else if (a.type === 'ackUrl') {
+      state.tunnel.urlChanged = false
+    }
+    pushAll()
+  })
+
+  renderControls()
+  build()
+})()
+</script>
+</body>
+</html>

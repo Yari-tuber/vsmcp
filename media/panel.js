@@ -251,6 +251,10 @@
       (s.self.port ? ' · 本窗口 <span class="mono">:' + s.self.port + '</span>' : ' · 本窗口服务未运行') +
       ' · 搜索 ' + (s.search === 'ripgrep' ? 'ripgrep' : '逐文件扫描') + '</footer>'
     app.innerHTML = h
+    if (!vscode) {
+      // 演示页：把内容高度告诉外层，让侧栏刚好装下（截图不出滚动条）
+      try { window.parent.postMessage({ type: 'vsmcp-demo-height', height: app.getBoundingClientRect().bottom + window.scrollY + 28 }, '*') } catch (e) { /* 忽略 */ }
+    }
   }
 
   // ---------- 事件 ----------
