@@ -5,6 +5,26 @@
 本项目的所有重要变更都会记录在此文件中。
 版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [2.0.0] - 2026-11-05
+
+改名 **VSMCP**（`yari.vsmcp`），把「每窗口 MCP 桥 + 多窗口路由器 + 工作区管理面板 + PowerShell 守护」合成一个插件。
+
+### 新增
+
+- **多窗口路由（内置 Hub）**：每个窗口照旧起自己的 MCP 服务（3333 起找空闲口），并登记到共享目录；所有窗口里只有一个抢到 Hub 端口 3340，外网隧道接在它上面，再转给「AI 现在操作的项目」所在窗口。自动跟随最后点过的窗口，或锁定某个项目；目标离线不改投、同一项目多开拒绝猜、每个请求发出时就定下目标。Hub 窗口关了，别的窗口几秒内接手，隧道也跟着在新 Hub 上重开
+- **6 个增强工具**：`workspace_overview`、`list_directory`、`find_files`、`search_text`、`read_files`、`git_inspect`（只读、跳过依赖和常见凭据文件、真实路径防越界、校验 workspacePath）；搜索用 VS Code 自带的 ripgrep，不用另装
+- **侧栏控制台**（WebviewView，跟随主题）：ChatGPT 连接地址、AI 当前项目、项目列表点一下锁定、连接自检、复制提示词；状态栏「GPT: 项目」「外网」
+- **断线自动恢复**：启动宽限 90 秒、断开满 60 秒才重建、冷却 120→600 秒指数退避、手动恢复最短 30 秒；分层自检（项目 / Hub / 隧道 / 公网），状态变化写进事件日志
+- 工具全部带 MCP annotations（只读工具 `readOnlyHint`，5 个破坏性工具 `destructiveHint`）
+- node:test 单元测试 + 隔离 VS Code 实测脚本（`npm test`、`npm run e2e`）
+
+### 变更
+
+- 命令和设置统一为 `vsmcp.*`；`mcpServer.enableCloudflareTunnel` 改为 `vsmcp.autoStartTunnel`；`vsmcp.portFallback` 默认改为开（多开窗口需要）
+- 默认不鉴权（`vsmcp.authToken` 留空），保留可选 Bearer
+- `@modelcontextprotocol/sdk` 升到 1.32.2、zod 4；HTTP 超时放宽，长命令不会被掐断；`run_terminal_command` 默认超时 2 分钟（`vsmcp.commandTimeoutMs`），单次最长 1 小时
+- `vsmcp.allowedCommands` 的说明改成和实际行为一致：留空 = 不限制
+
 ## [1.0.1] - 2026-09-23
 
 ### 新增

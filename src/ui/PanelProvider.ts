@@ -5,6 +5,7 @@ import * as vscode from 'vscode'
 import * as fs from 'fs'
 import { randomBytes } from 'crypto'
 import type { PanelState } from './panelState.js'
+import { log } from '../utils/logger.js'
 
 export interface PanelMessage {
   type?: string
@@ -30,6 +31,7 @@ export class PanelProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview, media)
     view.webview.onDidReceiveMessage(async (msg: PanelMessage) => {
       if (msg?.type === 'ready') {
+        log.info('面板', '侧栏面板已加载')
         this.push(true)
         return
       }

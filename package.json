@@ -303,7 +303,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/build-tests.mjs && node --test --test-reporter=spec \"out-test/*.test.cjs\"",
     "package": "vsce package --no-dependencies",
-    "e2e": "node scripts/e2e/run.mjs"
+    "e2e": "node scripts/e2e/isolated.mjs run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

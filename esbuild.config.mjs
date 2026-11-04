@@ -1,5 +1,5 @@
 import esbuild from 'esbuild'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 
 const isWatch = process.argv.includes('--watch')
 const isProd = process.argv.includes('--production')
@@ -28,5 +28,7 @@ if (isWatch) {
   console.log('Watching for changes...')
 } else {
   await esbuild.build(buildOptions)
+  // 生产构建不带 sourcemap，顺手删掉开发构建留下的 .map，免得打进 vsix
+  if (isProd) rmSync('out/extension.js.map', { force: true })
   console.log(`Build complete. (v${version})`)
 }

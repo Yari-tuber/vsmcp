@@ -139,6 +139,12 @@ export class HubRuntime {
   }
 
   async stop(): Promise<void> {
+    // 先同步收尾：窗口关闭时扩展宿主不一定等得到异步部分跑完。
+    // 隧道进程先杀掉（不留孤儿 cloudflared），hub.json 先删掉（别的窗口马上知道该接手了）
+    if (this.election.isHub) {
+      this.supervisor.shutdown()
+      this.opts.shared.removeHubIf(this.opts.sessionId)
+    }
     await this.election.stop()
   }
 
@@ -172,6 +178,8 @@ export class HubRuntime {
     const st = this.opts.shared.readState()
     this.lastManualHandled = st.recoverRequestedAt ?? 0
     this.lastConfigHandled = st.tunnelConfigAt ?? 0
+    const prevTunnel = this.opts.shared.readTunnel()
+    this.supervisor.seedLastUrl(prevTunnel?.url ?? prevTunnel?.previousUrl)
     this.writeHub()
   }
 
@@ -181,7 +189,8 @@ export class HubRuntime {
     s.removeHubIf(this.opts.sessionId)
     const cur = s.readTunnel()
     if (cur && cur.hubSessionId === this.opts.sessionId) {
-      s.writeTunnel({ ...cur, ...this.supervisor.status(), phase: 'off', url: null, hubSessionId: this.opts.sessionId, updatedAt: this.now() })
+      // 地址留在 previousUrl 里：接手的 Hub 重开临时隧道后能看出地址变了
+      s.writeTunnel({ ...cur, phase: 'off', url: null, previousUrl: cur.url ?? cur.previousUrl ?? null, hubSessionId: this.opts.sessionId, updatedAt: this.now() })
     }
   }
 

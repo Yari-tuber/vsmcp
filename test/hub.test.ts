@@ -303,6 +303,8 @@ test('Hub 接手：隧道跟着 Hub 走，新 Hub 按共享状态重开隧道', 
     const t = shared.readTunnel()!
     assert.equal(t.hubSessionId, 'wb')
     assert.equal(t.url, 'https://beta.example.test')
+    assert.equal(t.previousUrl, 'https://alpha.example.test', '临时隧道换了 Hub 地址会变，面板要能提示')
+    assert.ok(t.urlChangedAt)
 
     // 任何窗口写 tunnelWanted=false，Hub 下一轮就关隧道
     shared.updateState({ tunnelWanted: false })

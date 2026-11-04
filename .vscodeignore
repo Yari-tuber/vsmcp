@@ -9,7 +9,6 @@ tsconfig.json
 esbuild.config.mjs
 **/*.map
 **/*.ts
-!out/**
 CONTEXT.md
 TESTING.md
 DESIGN-vsmcp.md

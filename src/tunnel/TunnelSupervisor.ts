@@ -101,6 +101,13 @@ export class TunnelSupervisor {
     this.autoRecover = on
   }
 
+  /**
+   * 换了 Hub 时，新 Hub 从 tunnel.json 接过上一个地址：临时隧道重开后地址变了，面板能提示「地址变了」。
+   */
+  seedLastUrl(url: string | null | undefined): void {
+    if (url && !this.lastUrl) this.lastUrl = url
+  }
+
   /** 用户点了「恢复连接」：下一轮按手动规则（距上次重建至少 30 秒）重建 */
   requestManual(): void {
     this.manualPending = true
