@@ -143,12 +143,14 @@ export class CloudflareTunnel {
     const metrics = this.metricsPort ? ['--metrics', `127.0.0.1:${this.metricsPort}`] : []
 
     // --no-autoupdate 是 cloudflared 全局参数，放在最前避免与 run 子命令的参数解析冲突
+    // --protocol http2：QUIC(UDP) 在部分网络（尤其国内）会被丢弃，导致边缘连接失败、公网访问 530；三种隧道都固定走 TCP
+    // 命名隧道带 --url：不依赖 ~/.cloudflared/config.yml 里的 ingress，直接把流量交给本机 Hub 端口
+    //（令牌隧道的转发规则在 Cloudflare 后台配置，不加 --url）
     const args = isToken
-      ? ['--no-autoupdate', 'tunnel', ...metrics, 'run', '--token', token]
+      ? ['--no-autoupdate', 'tunnel', '--protocol', 'http2', ...metrics, 'run', '--token', token]
       : isNamed
-        ? ['--no-autoupdate', 'tunnel', ...metrics, 'run', name]
-        : // --protocol http2：QUIC(UDP) 在部分网络（尤其国内）会被丢弃，导致边缘连接失败、公网访问 530；固定走 TCP 兼容性最好
-          ['tunnel', '--url', `http://127.0.0.1:${port}`, '--protocol', 'http2', '--no-autoupdate', ...metrics]
+        ? ['--no-autoupdate', 'tunnel', '--url', `http://127.0.0.1:${port}`, '--protocol', 'http2', ...metrics, 'run', name]
+        : ['tunnel', '--url', `http://127.0.0.1:${port}`, '--protocol', 'http2', '--no-autoupdate', ...metrics]
 
     log.info('隧道', isToken
       ? `正在启动令牌隧道（本地端口 ${port}，固定域名 ${hostname}）...`
